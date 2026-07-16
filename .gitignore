@@ -1,0 +1,109 @@
+# 依赖目录
+node_modules/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg
+.eggs/
+
+# Java 构建产物
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.logs
+.mvn/
+hs_err_pid*
+
+# IDE 配置文件
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# 环境变量和配置文件
+.env
+.env.local
+.env.*.local
+*.local.properties
+application-local.yml
+application-local.yaml
+
+# 日志文件
+*.log
+logs/
+*.log.*
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 构建输出
+dist/
+build/
+out/
+*.egg-info/
+
+# 前端相关
+.next/
+.nuxt/
+package-lock.json
+
+# 测试覆盖率
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.nyc_output/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 敏感信息
+secrets/
+credentials.json
+*.pem
+*.key
+*.crt
+id_rsa*
+known_hosts
+
+# 对象存储本地文件
+minio-data/
+object-storage/
+
+# Docker 本地数据
+docker-data/
+mysql-data/
+redis-data/
+rabbitmq-data/
+chroma-data/
+
+# 向量库数据
+*.chroma/
+chroma_db/
+
+# AI开发工具相关
+.claude
+.codegraph
+develop_plan
+docs
+AGENTS.md
