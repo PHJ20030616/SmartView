@@ -1,0 +1,53 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: smartview-server
+  mvc:
+    throw-exception-if-no-handler-found: true
+    static-path-pattern: /static/**
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${MYSQL_JDBC_URL:jdbc:mysql://localhost:3306/smartview?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${MYSQL_USER:smartview}
+    password: ${MYSQL_PASSWORD:smartview_password}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:smartview_redis_password}
+      database: ${REDIS_DATABASE:0}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_AMQP_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:smartview}
+    password: ${RABBITMQ_DEFAULT_PASS:smartview_rabbitmq_password}
+    virtual-host: ${RABBITMQ_DEFAULT_VHOST:smartview}
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  pattern:
+    level: "%5p [traceId:%X{traceId:-}]"
+
+smartview:
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ROOT_USER:smartview}
+    secret-key: ${MINIO_ROOT_PASSWORD:smartview_minio_password}
+    bucket: ${MINIO_BUCKET:smartview}
+  jwt:
+    # 本地默认值仅用于开发启动；生产环境必须通过环境变量覆盖。
+    secret: ${JWT_SECRET:smartview-local-development-secret-change-me-at-least-32-bytes}
+    issuer: ${JWT_ISSUER:smartview}
+    access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:7200}

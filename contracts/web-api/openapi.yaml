@@ -366,6 +366,7 @@ components:
       required:
         - code
         - message
+        - data
         - traceId
         - timestamp
       properties:
@@ -379,6 +380,7 @@ components:
           example: "操作成功"
         data:
           type: object
+          nullable: true
           description: 响应数据
         traceId:
           type: string
@@ -394,6 +396,7 @@ components:
       required:
         - code
         - message
+        - data
         - traceId
         - timestamp
       properties:
@@ -403,6 +406,10 @@ components:
         message:
           type: string
           description: 错误消息
+        data:
+          type: object
+          nullable: true
+          description: 错误响应数据，默认为空
         traceId:
           type: string
           format: uuid
@@ -416,16 +423,31 @@ components:
           description: 错误详细信息
 
     HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/HealthData'
+
+    HealthData:
       type: object
       required:
         - status
+        - service
+        - timestamp
       properties:
         status:
           type: string
           enum: [UP, DOWN]
+          description: 服务健康状态
+        service:
+          type: string
+          description: 服务名称
         timestamp:
           type: string
           format: date-time
+          description: 健康检查时间
 
     RegisterRequest:
       type: object
