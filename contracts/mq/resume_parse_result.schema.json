@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResumeParseResult",
+  "description": "简历解析结果消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "resumeFileId",
+    "success"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["RESUME_PARSE_RESULT"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "resumeFileId": {
+      "type": "string",
+      "description": "简历文件 ID"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "解析是否成功"
+    },
+    "candidateName": {
+      "type": "string",
+      "description": "候选人姓名"
+    },
+    "contactInfo": {
+      "type": "object",
+      "description": "联系方式"
+    },
+    "education": {
+      "type": "array",
+      "description": "教育经历"
+    },
+    "workExperience": {
+      "type": "array",
+      "description": "工作经历"
+    },
+    "projectExperience": {
+      "type": "array",
+      "description": "项目经历"
+    },
+    "skills": {
+      "type": "array",
+      "description": "技能列表"
+    },
+    "rawText": {
+      "type": "string",
+      "description": "简历原文"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "解析失败原因，success=false 时必需"
+    }
+  }
+}

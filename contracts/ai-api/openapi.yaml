@@ -1,0 +1,818 @@
+openapi: 3.0.3
+info:
+  title: SmartView AI API
+  description: SmartView FastAPI AI 服务对 Spring Boot 暴露的 API 契约
+  version: 1.0.0
+  contact:
+    name: SmartView AI Team
+servers:
+  - url: http://localhost:8000
+    description: 本地开发环境
+
+tags:
+  - name: 健康检查
+    description: 服务健康状态
+  - name: 简历解析
+    description: 简历文件解析和结构化
+  - name: 画像分析
+    description: 简历画像分析
+  - name: 面试流程
+    description: 面试问题生成和回答评估
+  - name: 报告生成
+    description: 面试报告生成
+
+security:
+  - apiKeyAuth: []
+
+paths:
+  /api/v1/health:
+    get:
+      tags:
+        - 健康检查
+      summary: AI 服务健康状态检查
+      operationId: aiHealthCheck
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    enum: [UP, DOWN]
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/v1/resume/parse:
+    post:
+      tags:
+        - 简历解析
+      summary: 解析简历文件
+      operationId: parseResume
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParseResumeRequest'
+      responses:
+        '200':
+          description: 解析成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseResumeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/profile/analyze:
+    post:
+      tags:
+        - 画像分析
+      summary: 生成方向画像分析
+      operationId: analyzeProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzeProfileRequest'
+      responses:
+        '200':
+          description: 分析成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzeProfileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/interview/stage-plan:
+    post:
+      tags:
+        - 面试流程
+      summary: 生成阶段计划
+      operationId: generateStagePlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateStagePlanRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StagePlanResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/interview/first-question:
+    post:
+      tags:
+        - 面试流程
+      summary: 生成首题
+      operationId: generateFirstQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateFirstQuestionRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/interview/evaluate:
+    post:
+      tags:
+        - 面试流程
+      summary: 评估回答并生成候选池
+      operationId: evaluateAnswer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluateAnswerRequest'
+      responses:
+        '200':
+          description: 评估成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluateAnswerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /api/v1/interview/report:
+    post:
+      tags:
+        - 报告生成
+      summary: 生成面试报告
+      operationId: generateReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateReportRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: 固定 API Key 认证
+
+  schemas:
+    ParseResumeRequest:
+      type: object
+      required:
+        - fileUrl
+        - mimeType
+        - traceId
+      properties:
+        fileUrl:
+          type: string
+          format: uri
+          description: MinIO 预签名 URL
+        mimeType:
+          type: string
+          description: 文件 MIME 类型
+          example: application/pdf
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    ParseResumeResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 解析是否成功
+        candidateName:
+          type: string
+          description: 候选人姓名
+        contactInfo:
+          type: object
+          description: 联系方式
+          properties:
+            phone:
+              type: string
+            email:
+              type: string
+            location:
+              type: string
+        education:
+          type: array
+          description: 教育经历
+          items:
+            type: object
+            properties:
+              school:
+                type: string
+              degree:
+                type: string
+              major:
+                type: string
+              startDate:
+                type: string
+              endDate:
+                type: string
+        workExperience:
+          type: array
+          description: 工作经历
+          items:
+            type: object
+            properties:
+              company:
+                type: string
+              position:
+                type: string
+              startDate:
+                type: string
+              endDate:
+                type: string
+              description:
+                type: string
+        projectExperience:
+          type: array
+          description: 项目经历
+          items:
+            type: object
+            properties:
+              projectName:
+                type: string
+              role:
+                type: string
+              description:
+                type: string
+              techStack:
+                type: array
+                items:
+                  type: string
+        skills:
+          type: array
+          description: 技能列表
+          items:
+            type: string
+        rawText:
+          type: string
+          description: 简历原文
+        errorMessage:
+          type: string
+          description: 解析失败原因
+
+    AnalyzeProfileRequest:
+      type: object
+      required:
+        - resumeProfileId
+        - roleDirection
+        - traceId
+      properties:
+        resumeProfileId:
+          type: string
+          description: 简历画像 ID
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    AnalyzeProfileResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 分析是否成功
+        skillTags:
+          type: array
+          description: 技能标签
+          items:
+            type: object
+            properties:
+              skill:
+                type: string
+              level:
+                type: string
+                enum: [EXPERT, PROFICIENT, FAMILIAR, BASIC]
+              source:
+                type: string
+                enum: [WORK, PROJECT, EDUCATION]
+        projectGraph:
+          type: object
+          description: 项目关系图谱
+          properties:
+            projects:
+              type: array
+              items:
+                type: object
+                properties:
+                  projectName:
+                    type: string
+                  techStack:
+                    type: array
+                    items:
+                      type: string
+                  responsibilities:
+                    type: array
+                    items:
+                      type: string
+                  highlights:
+                    type: array
+                    items:
+                      type: string
+        capabilityHints:
+          type: object
+          description: 能力线索
+          properties:
+            engineering:
+              type: array
+              items:
+                type: string
+            architecture:
+              type: array
+              items:
+                type: string
+            domain:
+              type: array
+              items:
+                type: string
+        riskPoints:
+          type: array
+          description: 风险点
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+                enum: [VAGUE_DESCRIPTION, SHALLOW_DEPTH, OUTDATED_TECH, LACK_EVIDENCE]
+              description:
+                type: string
+        suggestedTopics:
+          type: array
+          description: 建议面试主题
+          items:
+            type: string
+        stageTargets:
+          type: object
+          description: 阶段覆盖目标
+          properties:
+            basic:
+              type: array
+              items:
+                type: string
+            project:
+              type: array
+              items:
+                type: string
+            scenario:
+              type: array
+              items:
+                type: string
+        errorMessage:
+          type: string
+          description: 分析失败原因
+
+    GenerateStagePlanRequest:
+      type: object
+      required:
+        - profileAnalysisId
+        - roleDirection
+        - traceId
+      properties:
+        profileAnalysisId:
+          type: string
+          description: 画像分析 ID
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    StagePlanResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 生成是否成功
+        stages:
+          type: array
+          description: 阶段列表
+          items:
+            type: object
+            required:
+              - stage
+              - minQuestions
+              - maxQuestions
+              - topics
+              - maxFollowUpDepth
+            properties:
+              stage:
+                type: string
+                enum: [BASIC, PROJECT, SCENARIO]
+                description: 阶段名称
+              minQuestions:
+                type: integer
+                description: 最小题量
+              maxQuestions:
+                type: integer
+                description: 最大题量
+              topics:
+                type: array
+                description: 必覆盖主题
+                items:
+                  type: string
+              maxFollowUpDepth:
+                type: integer
+                description: 单主题最大追问深度
+        totalMaxQuestions:
+          type: integer
+          description: 总题量上限
+        errorMessage:
+          type: string
+          description: 生成失败原因
+
+    GenerateFirstQuestionRequest:
+      type: object
+      required:
+        - sessionId
+        - stagePlan
+        - resumeProfileId
+        - profileVersion
+        - traceId
+      properties:
+        sessionId:
+          type: string
+          description: 面试会话 ID
+        stagePlan:
+          type: object
+          description: 阶段计划
+        resumeProfileId:
+          type: string
+          description: 简历画像 ID
+        profileVersion:
+          type: integer
+          description: 简历画像版本号
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    QuestionResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 生成是否成功
+        questionText:
+          type: string
+          description: 问题正文
+        questionType:
+          type: string
+          enum: [OPENING, FOLLOW_UP, SWITCH_TOPIC, STAGE_ENTRY]
+          description: 问题类型
+        sourceType:
+          type: string
+          enum: [KNOWLEDGE_BASE, EXPERIENCE_CASE, RESUME_PROJECT, MIXED]
+          description: 来源类型
+        expectedPoints:
+          type: array
+          description: 期望回答要点
+          items:
+            type: string
+        knowledgeRefs:
+          type: array
+          description: 引用的八股知识片段
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              category:
+                type: string
+              snippet:
+                type: string
+        caseRefs:
+          type: array
+          description: 引用的面经案例
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              scenario:
+                type: string
+              snippet:
+                type: string
+        errorMessage:
+          type: string
+          description: 生成失败原因
+
+    EvaluateAnswerRequest:
+      type: object
+      required:
+        - sessionId
+        - questionId
+        - answerText
+        - sessionContext
+        - traceId
+      properties:
+        sessionId:
+          type: string
+          description: 面试会话 ID
+        questionId:
+          type: string
+          description: 问题 ID
+        answerText:
+          type: string
+          description: 用户回答文本
+        sessionContext:
+          type: object
+          description: 会话上下文
+          properties:
+            currentStage:
+              type: string
+            currentTopic:
+              type: string
+            questionCount:
+              type: integer
+            stageCoverage:
+              type: object
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    EvaluateAnswerResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 评估是否成功
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 回答得分
+        level:
+          type: string
+          enum: [GOOD, NORMAL, WEAK]
+          description: 回答等级
+        matchedPoints:
+          type: array
+          description: 已命中的要点
+          items:
+            type: string
+        missingPoints:
+          type: array
+          description: 缺失要点
+          items:
+            type: string
+        riskPoints:
+          type: array
+          description: 暴露的问题或风险
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              description:
+                type: string
+        followUpCandidates:
+          type: array
+          description: 追问候选池（0-2 道）
+          items:
+            type: object
+            required:
+              - questionText
+              - reason
+            properties:
+              questionText:
+                type: string
+                description: 追问题目
+              reason:
+                type: string
+                description: 追问原因
+              targetPoint:
+                type: string
+                description: 目标考察点
+        errorMessage:
+          type: string
+          description: 评估失败原因
+
+    GenerateReportRequest:
+      type: object
+      required:
+        - sessionId
+        - traceId
+      properties:
+        sessionId:
+          type: string
+          description: 面试会话 ID
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    ReportResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 生成是否成功
+        overallScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 综合得分
+        readinessLevel:
+          type: string
+          enum: [NOT_READY, NEEDS_PRACTICE, READY, WELL_PREPARED]
+          description: 面试准备度等级
+        roleFitScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 岗位匹配度得分
+        summary:
+          type: string
+          description: 总体评价
+        strengths:
+          type: array
+          description: 优势点
+          items:
+            type: string
+        weaknesses:
+          type: array
+          description: 薄弱点
+          items:
+            type: string
+        riskPoints:
+          type: array
+          description: 风险点
+          items:
+            type: string
+        suggestions:
+          type: array
+          description: 学习建议
+          items:
+            type: object
+            properties:
+              topic:
+                type: string
+              reason:
+                type: string
+              resources:
+                type: array
+                items:
+                  type: string
+        coverage:
+          type: object
+          description: 覆盖情况
+          properties:
+            basicCoverage:
+              type: number
+              format: float
+              description: 基础知识覆盖率
+            projectCoverage:
+              type: number
+              format: float
+              description: 项目经历覆盖率
+            scenarioCoverage:
+              type: number
+              format: float
+              description: 场景题覆盖率
+        referenceAnswers:
+          type: array
+          description: 每题参考答案
+          items:
+            type: object
+            required:
+              - questionId
+              - answerType
+              - referenceContent
+            properties:
+              questionId:
+                type: string
+                description: 问题 ID
+              answerType:
+                type: string
+                enum: [BASIC_KEY_POINTS, PROJECT_STRUCTURE, SCENARIO_FRAMEWORK]
+                description: 答案类型
+              referenceContent:
+                type: string
+                description: 参考答案正文
+              keyPoints:
+                type: array
+                description: 关键要点
+                items:
+                  type: string
+              tradeoffs:
+                type: array
+                description: 场景题中的权衡点
+                items:
+                  type: object
+                  properties:
+                    aspect:
+                      type: string
+                    options:
+                      type: array
+                      items:
+                        type: string
+        errorMessage:
+          type: string
+          description: 生成失败原因
+
+  responses:
+    BadRequest:
+      description: 请求参数格式错误
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - error
+              - message
+            properties:
+              error:
+                type: string
+              message:
+                type: string
+              traceId:
+                type: string
+                format: uuid
+
+    InternalServerError:
+      description: 服务内部错误
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - error
+              - message
+            properties:
+              error:
+                type: string
+              message:
+                type: string
+              traceId:
+                type: string
+                format: uuid

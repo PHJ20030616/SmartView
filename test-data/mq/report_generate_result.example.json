@@ -1,0 +1,11 @@
+{
+  "taskId": "880e8400-e29b-41d4-a716-446655440003",
+  "traceId": "ac9e6679-7425-40de-944b-e07fc1f90aea",
+  "messageType": "REPORT_GENERATE_RESULT",
+  "schemaVersion": "1.0.0",
+  "retryCount": 0,
+  "createdAt": "2026-07-16T11:20:45Z",
+  "sessionId": "session_001",
+  "success": true,
+  "reportId": "report_001"
+}

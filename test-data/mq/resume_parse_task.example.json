@@ -1,0 +1,11 @@
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "traceId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "messageType": "RESUME_PARSE_TASK",
+  "schemaVersion": "1.0.0",
+  "retryCount": 0,
+  "createdAt": "2026-07-16T10:30:00Z",
+  "fileUrl": "http://localhost:9000/smartview/resumes/user123/resume_20260716.pdf?X-Amz-Expires=3600",
+  "mimeType": "application/pdf",
+  "resumeFileId": "resume_file_001"
+}

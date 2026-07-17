@@ -1,0 +1,10 @@
+{
+  "taskId": "660e8400-e29b-41d4-a716-446655440001",
+  "traceId": "8c9e6679-7425-40de-944b-e07fc1f90ae8",
+  "messageType": "RESUME_VECTORIZE_TASK",
+  "schemaVersion": "1.0.0",
+  "retryCount": 0,
+  "createdAt": "2026-07-16T10:35:00Z",
+  "resumeProfileId": "profile_001",
+  "profileVersion": 1
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProfileAnalyzeTask",
+  "description": "画像分析任务消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "resumeProfileId",
+    "roleDirection",
+    "profileVersion",
+    "vectorizeCompleted"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["PROFILE_ANALYZE_TASK"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数，初始为 0，消费失败后递增"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "resumeProfileId": {
+      "type": "string",
+      "description": "简历画像 ID"
+    },
+    "roleDirection": {
+      "type": "string",
+      "enum": ["JAVA_BACKEND", "AGENT_DEVELOPMENT"],
+      "description": "面试方向"
+    },
+    "profileVersion": {
+      "type": "integer",
+      "description": "简历画像版本号，确保使用正确版本的简历数据"
+    },
+    "vectorizeCompleted": {
+      "type": "boolean",
+      "description": "简历向量是否已成功入库，画像分析任务投递前必须校验为 true"
+    }
+  }
+}

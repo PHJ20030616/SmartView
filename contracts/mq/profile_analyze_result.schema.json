@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProfileAnalyzeResult",
+  "description": "画像分析结果消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "resumeProfileId",
+    "success"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["PROFILE_ANALYZE_RESULT"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "resumeProfileId": {
+      "type": "string",
+      "description": "简历画像 ID"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "分析是否成功"
+    },
+    "skillTags": {
+      "type": "array",
+      "description": "技能标签"
+    },
+    "projectGraph": {
+      "type": "object",
+      "description": "项目关系图谱"
+    },
+    "capabilityHints": {
+      "type": "object",
+      "description": "能力线索"
+    },
+    "riskPoints": {
+      "type": "array",
+      "description": "风险点"
+    },
+    "suggestedTopics": {
+      "type": "array",
+      "description": "建议面试主题"
+    },
+    "stageTargets": {
+      "type": "object",
+      "description": "阶段覆盖目标"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "分析失败原因，success=false 时必需"
+    }
+  }
+}

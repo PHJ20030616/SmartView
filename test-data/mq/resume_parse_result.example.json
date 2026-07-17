@@ -1,0 +1,44 @@
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "traceId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "messageType": "RESUME_PARSE_RESULT",
+  "schemaVersion": "1.0.0",
+  "retryCount": 0,
+  "createdAt": "2026-07-16T10:30:15Z",
+  "resumeFileId": "resume_file_001",
+  "success": true,
+  "candidateName": "张三",
+  "contactInfo": {
+    "phone": "13800138000",
+    "email": "zhangsan@example.com",
+    "location": "北京市海淀区"
+  },
+  "education": [
+    {
+      "school": "清华大学",
+      "degree": "本科",
+      "major": "计算机科学与技术",
+      "startDate": "2018-09",
+      "endDate": "2022-06"
+    }
+  ],
+  "workExperience": [
+    {
+      "company": "字节跳动",
+      "position": "Java 后端工程师",
+      "startDate": "2022-07",
+      "endDate": "2024-12",
+      "description": "负责推荐系统后端开发"
+    }
+  ],
+  "projectExperience": [
+    {
+      "projectName": "推荐系统重构",
+      "role": "核心开发",
+      "description": "使用 Spring Cloud 重构推荐系统",
+      "techStack": ["Java", "Spring Boot", "Redis", "Kafka"]
+    }
+  ],
+  "skills": ["Java", "Spring Boot", "MySQL", "Redis", "Kafka", "微服务"],
+  "rawText": "张三\n联系方式：13800138000...[简历全文]"
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReportGenerateResult",
+  "description": "报告生成结果消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "sessionId",
+    "success"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["REPORT_GENERATE_RESULT"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "面试会话 ID"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "报告生成是否成功"
+    },
+    "reportId": {
+      "type": "string",
+      "description": "生成的报告 ID"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "报告生成失败原因，success=false 时必需"
+    }
+  }
+}

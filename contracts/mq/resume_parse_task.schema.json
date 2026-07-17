@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResumeParseTask",
+  "description": "简历解析任务消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "fileUrl",
+    "mimeType",
+    "resumeFileId"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["RESUME_PARSE_TASK"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数，初始为 0，消费失败后递增"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "fileUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "MinIO 预签名 URL，有效期 1 小时"
+    },
+    "mimeType": {
+      "type": "string",
+      "description": "文件 MIME 类型"
+    },
+    "resumeFileId": {
+      "type": "string",
+      "description": "简历文件 ID"
+    }
+  }
+}

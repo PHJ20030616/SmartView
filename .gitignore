@@ -102,8 +102,8 @@ chroma-data/
 chroma_db/
 
 # AI开发工具相关
-.claude
-.codegraph
-develop_plan
-docs
-AGENTS.md
+.claude/
+.codegraph/
+
+# 临时验证脚本
+verify_task_*.sh

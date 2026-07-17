@@ -1,0 +1,49 @@
+{
+  "taskId": "770e8400-e29b-41d4-a716-446655440002",
+  "traceId": "9c9e6679-7425-40de-944b-e07fc1f90ae9",
+  "messageType": "PROFILE_ANALYZE_RESULT",
+  "schemaVersion": "1.0.0",
+  "retryCount": 0,
+  "createdAt": "2026-07-16T10:40:30Z",
+  "resumeProfileId": "profile_001",
+  "success": true,
+  "skillTags": [
+    {
+      "skill": "Java",
+      "level": "PROFICIENT",
+      "source": "WORK"
+    },
+    {
+      "skill": "Spring Boot",
+      "level": "PROFICIENT",
+      "source": "PROJECT"
+    }
+  ],
+  "projectGraph": {
+    "projects": [
+      {
+        "projectName": "推荐系统重构",
+        "techStack": ["Java", "Spring Boot", "Redis", "Kafka"],
+        "responsibilities": ["架构设计", "核心开发"],
+        "highlights": ["性能提升30%", "代码质量显著提高"]
+      }
+    ]
+  },
+  "capabilityHints": {
+    "engineering": ["微服务架构", "高并发处理"],
+    "architecture": ["分布式系统设计"],
+    "domain": ["推荐系统"]
+  },
+  "riskPoints": [
+    {
+      "category": "SHALLOW_DEPTH",
+      "description": "项目描述缺乏技术细节"
+    }
+  ],
+  "suggestedTopics": ["Spring Boot 原理", "Redis 缓存设计", "Kafka 消息队列", "微服务治理"],
+  "stageTargets": {
+    "basic": ["Java 并发", "JVM 调优", "Spring 原理"],
+    "project": ["推荐系统架构", "性能优化方案"],
+    "scenario": ["高并发场景设计", "缓存策略选择"]
+  }
+}

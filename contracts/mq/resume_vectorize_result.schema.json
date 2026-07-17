@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResumeVectorizeResult",
+  "description": "简历向量化结果消息",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "resumeProfileId",
+    "success"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["RESUME_VECTORIZE_RESULT"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "resumeProfileId": {
+      "type": "string",
+      "description": "简历画像 ID"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "向量化是否成功"
+    },
+    "chunksCount": {
+      "type": "integer",
+      "description": "成功入库的切片数量"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "向量化失败原因，success=false 时必需"
+    }
+  }
+}
