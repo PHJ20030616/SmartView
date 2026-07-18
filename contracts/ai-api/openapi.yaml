@@ -790,6 +790,7 @@ components:
             required:
               - error
               - message
+              - traceId
             properties:
               error:
                 type: string
@@ -808,6 +809,7 @@ components:
             required:
               - error
               - message
+              - traceId
             properties:
               error:
                 type: string
