@@ -37,8 +37,6 @@ hs_err_pid*
 smartview-infra\.env
 .env.local
 .env.*.local
-!.env.example
-!**/.env.example
 *.local.properties
 application-local.yml
 application-local.yaml
@@ -111,3 +109,6 @@ AGENTS.md
 
 # 临时验证脚本
 verify_task_*.sh
+
+# 开发计划
+develop_plan
