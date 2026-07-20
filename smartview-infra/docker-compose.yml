@@ -7,8 +7,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-smartview_root_password}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-smartview}
-      MYSQL_USER: ${MYSQL_USER:-smartview}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartview_password}
+      # MYSQL_USER: ${MYSQL_USER:-smartview}
+      # MYSQL_PASSWORD: ${MYSQL_PASSWORD:-smartview_password}
       TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "${MYSQL_PORT:-3306}:3306"

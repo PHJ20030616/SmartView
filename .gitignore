@@ -34,6 +34,7 @@ hs_err_pid*
 
 # 环境变量和配置文件
 .env
+smartview-infra\.env
 .env.local
 .env.*.local
 !.env.example
@@ -106,6 +107,7 @@ chroma_db/
 # AI开发工具相关
 .claude/
 .codegraph/
+AGENTS.md
 
 # 临时验证脚本
 verify_task_*.sh
