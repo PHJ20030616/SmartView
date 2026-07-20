@@ -1,7 +1,18 @@
+/**
+ * 首页组件
+ *
+ * 展示应用的核心功能入口卡片：
+ * - 简历画像：上传和确认简历信息
+ * - 模拟面试：进行动态面试问答
+ * - 复盘报告：查看面试准备度和建议
+ */
 import { FileSearchOutlined, MessageOutlined, PieChartOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Row, Space, Typography } from "antd";
 import { useNavigate } from "react-router-dom";
 
+/**
+ * 功能入口配置
+ */
 const actions = [
   {
     title: "简历画像",

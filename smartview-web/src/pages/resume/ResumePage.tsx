@@ -1,3 +1,11 @@
+/**
+ * 简历页面组件
+ *
+ * 提供简历上传和解析功能：
+ * - 支持 PDF 格式的简历上传
+ * - 上传后生成结构化简历画像
+ * - 画像作为后续面试出题的依据
+ */
 import { InboxOutlined } from "@ant-design/icons";
 import { Button, Card, Space, Typography, Upload } from "antd";
 

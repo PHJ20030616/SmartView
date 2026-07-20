@@ -1,3 +1,11 @@
+/**
+ * 主布局组件
+ *
+ * 提供应用的整体布局结构：
+ * - 左侧侧边栏：品牌标识和导航菜单
+ * - 顶部导航栏：页面标题和用户操作
+ * - 内容区域：子路由页面内容
+ */
 import {
   FileTextOutlined,
   HomeOutlined,
@@ -11,6 +19,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const { Header, Content, Sider } = Layout;
 
+// 导航菜单项配置
 const menuItems: MenuProps["items"] = [
   { key: "/", icon: <HomeOutlined />, label: "首页" },
   { key: "/resume", icon: <FileTextOutlined />, label: "简历" },
@@ -21,10 +30,12 @@ const menuItems: MenuProps["items"] = [
 export default function MainLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  // 提取当前一级路由作为选中的菜单项
   const selectedKey = location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`;
 
   return (
     <Layout className="app-shell">
+      {/* 左侧侧边栏 */}
       <Sider breakpoint="lg" collapsedWidth={0} className="app-sider" width={224}>
         <div className="app-brand">SmartView</div>
         <Menu
@@ -36,6 +47,7 @@ export default function MainLayout() {
         />
       </Sider>
       <Layout>
+        {/* 顶部导航栏 */}
         <Header className="app-header">
           <Typography.Text strong>模拟面试工作台</Typography.Text>
           <Space>
@@ -44,6 +56,7 @@ export default function MainLayout() {
             </Button>
           </Space>
         </Header>
+        {/* 内容区域 */}
         <Content className="app-content">
           <Outlet />
         </Content>

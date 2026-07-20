@@ -1,3 +1,11 @@
+/**
+ * 面试页面组件
+ *
+ * 提供模拟面试功能：
+ * - 基于简历画像动态生成面试问题
+ * - 支持回答输入和提交
+ * - 记录面试对话历史用于后续复盘
+ */
 import { SendOutlined } from "@ant-design/icons";
 import { Button, Card, Input, Space, Typography } from "antd";
 

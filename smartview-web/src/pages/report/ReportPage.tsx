@@ -1,3 +1,12 @@
+/**
+ * 报告页面组件
+ *
+ * 提供面试复盘报告功能：
+ * - 展示面试准备度评估
+ * - 分析岗位匹配度
+ * - 列出风险点和改进建议
+ * - 支持报告导出
+ */
 import { DownloadOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Space, Typography } from "antd";
 

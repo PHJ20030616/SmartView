@@ -1,7 +1,16 @@
+/**
+ * 登录页面组件
+ *
+ * 提供用户登录表单，包含账号和密码输入。
+ * 登录成功后跳转到首页。
+ */
 import { LoginOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Typography } from "antd";
 import { useNavigate } from "react-router-dom";
 
+/**
+ * 登录表单数据类型
+ */
 type LoginFormValues = {
   username: string;
   password: string;
@@ -10,7 +19,13 @@ type LoginFormValues = {
 export default function LoginPage() {
   const navigate = useNavigate();
 
+  /**
+   * 处理登录表单提交
+   *
+   * @param _values - 表单值（包含用户名和密码）
+   */
   const handleFinish = (_values: LoginFormValues) => {
+    // TODO: 调用登录 API
     navigate("/");
   };
 
