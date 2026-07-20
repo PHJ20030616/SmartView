@@ -10,8 +10,21 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${MYSQL_JDBC_URL:jdbc:mysql://localhost:3306/smartview?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
-    username: ${MYSQL_USER:smartview}
-    password: ${MYSQL_PASSWORD:smartview_password}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_ROOT_PASSWORD}
+  # Flyway 数据库迁移配置
+  flyway:
+    enabled: true
+    # 如果数据库非空且没有 flyway_schema_history 表，则自动创建基线版本
+    baseline-on-migrate: true
+    # 迁移脚本存放位置
+    locations: classpath:db/migration
+    # 基线版本号，用于已有数据库的初始化
+    baseline-version: 0
+    # 迁移脚本文件编码
+    encoding: UTF-8
+    # 校验已应用的迁移脚本是否被修改（生产环境建议开启）
+    validate-on-migrate: true
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -29,6 +42,15 @@ mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
   configuration:
     map-underscore-to-camel-case: true
+  # 全局逻辑删除配置
+  global-config:
+    db-config:
+      # 逻辑删除字段名
+      logic-delete-field: deleted
+      # 逻辑未删除值（默认值）
+      logic-not-delete-value: 0
+      # 逻辑已删除值
+      logic-delete-value: 1
 
 springdoc:
   api-docs:
