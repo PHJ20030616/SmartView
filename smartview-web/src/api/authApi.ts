@@ -6,11 +6,11 @@ import { fetcher } from './client';
  */
 export const authApi = {
   // 用户注册
-  register: fetcher.path('/api/auth/register').method('post').create(),
+  register: fetcher.path('/auth/register').method('post').create(),
 
   // 用户登录
-  login: fetcher.path('/api/auth/login').method('post').create(),
+  login: fetcher.path('/auth/login').method('post').create(),
 
   // 获取当前登录用户信息
-  getCurrentUser: fetcher.path('/api/users/me').method('get').create(),
+  getCurrentUser: fetcher.path('/users/me').method('get').create(),
 };
