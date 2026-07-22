@@ -40,6 +40,7 @@ smartview-infra\.env
 *.local.properties
 application-local.yml
 application-local.yaml
+smartview-server\src\main\resources\application.yml
 
 # 日志文件
 *.log
@@ -111,4 +112,4 @@ AGENTS.md
 verify_task_*.sh
 
 # 开发计划
-develop_plan
+develop_plan/

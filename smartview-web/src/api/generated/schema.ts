@@ -294,7 +294,7 @@ export interface components {
         RegisterRequest: {
             /** @description 登录用户名 */
             username: string;
-            /** @description 登录密码 */
+            /** @description 登录密码，UTF-8 编码后不得超过 BCrypt 的 72 字节限制 */
             password: string;
             /** @description 用户昵称 */
             nickname: string;
@@ -309,7 +309,7 @@ export interface components {
         LoginRequest: {
             /** @description 登录用户名 */
             username: string;
-            /** @description 登录密码 */
+            /** @description 登录密码，UTF-8 编码后不得超过 BCrypt 的 72 字节限制 */
             password: string;
         };
         LoginResponse: components["schemas"]["ApiResponse"] & {
@@ -786,7 +786,10 @@ export interface operations {
                     "application/json": components["schemas"]["LoginResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
         };
     };
     getCurrentUser: {

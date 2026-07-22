@@ -6,6 +6,7 @@ import com.smartview.generated.web.model.LoginRequest;
 import com.smartview.generated.web.model.RegisterRequest;
 import com.smartview.generated.web.model.UserInfo;
 import com.smartview.user.service.AuthService;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,12 +26,12 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ApiResponse<UserInfo> register(@RequestBody RegisterRequest request) {
+    public ApiResponse<UserInfo> register(@Valid @RequestBody RegisterRequest request) {
         return ApiResponse.success(authService.register(request));
     }
 
     @PostMapping("/login")
-    public ApiResponse<LoginData> login(@RequestBody LoginRequest request) {
+    public ApiResponse<LoginData> login(@Valid @RequestBody LoginRequest request) {
         return ApiResponse.success(authService.login(request));
     }
 }
