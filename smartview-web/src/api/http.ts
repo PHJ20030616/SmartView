@@ -3,11 +3,9 @@
  *
  * 基于 Axios 封装的 HTTP 客户端，提供：
  * - 请求追踪 ID 管理（生成、存储、同步）
- * - 请求/响应拦截器
- * - 统一的请求配置
+ * - Trace ID 请求头构造
+ * - 服务端 Trace ID 同步
  */
-import axios from "axios";
-import type { AxiosResponse, InternalAxiosRequestConfig } from "axios";
 
 // 追踪 ID 请求头名称
 export const TRACE_ID_HEADER = "X-Trace-Id";
@@ -192,33 +190,3 @@ export function syncTraceIdFromResponse(response: TraceIdResponse): string | nul
 export function resetTraceIdForTest(): void {
   memoryTraceId = null;
 }
-
-/**
- * HTTP 客户端实例
- *
- * 配置了基础 URL、超时时间和拦截器。
- */
-export const httpClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
-  timeout: 15000,
-});
-
-// 请求拦截器：自动添加追踪 ID
-httpClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  config.headers.set(TRACE_ID_HEADER, getCurrentTraceId());
-  return config;
-});
-
-// 响应拦截器：同步服务端返回的追踪 ID
-httpClient.interceptors.response.use(
-  (response: AxiosResponse) => {
-    syncTraceIdFromResponse(response);
-    return response;
-  },
-  (error: unknown) => {
-    if (axios.isAxiosError(error) && error.response) {
-      syncTraceIdFromResponse(error.response);
-    }
-    return Promise.reject(error);
-  },
-);
