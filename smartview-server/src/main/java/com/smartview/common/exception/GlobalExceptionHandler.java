@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -88,6 +89,23 @@ public class GlobalExceptionHandler {
                 .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
                 .collect(Collectors.joining("；"));
         return validationFailure(message);
+    }
+
+    /**
+     * 处理请求体缺失或 JSON 无法反序列化的异常。
+     *
+     * <p>该异常发生在进入 Controller 和业务校验之前，需要显式映射为 400，
+     * 同时隐藏 Jackson、字段类型等底层解析细节。</p>
+     *
+     * @param exception 请求体读取异常
+     * @return 标准错误响应
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMessageNotReadable(
+            HttpMessageNotReadableException exception
+    ) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failure(ResponseCode.BAD_REQUEST, "请求体格式错误，请检查后重试"));
     }
 
     /**

@@ -35,6 +35,7 @@ class GlobalExceptionHandlerTest {
     private static final String UNEXPECTED_TRACE_ID = "00000000-0000-4000-8000-000000000103";
     private static final String AUTH_TRACE_ID = "00000000-0000-4000-8000-000000000104";
     private static final String NOT_FOUND_TRACE_ID = "00000000-0000-4000-8000-000000000105";
+    private static final String UNREADABLE_BODY_TRACE_ID = "00000000-0000-4000-8000-000000000106";
 
     @Autowired
     private MockMvc mockMvc;
@@ -62,6 +63,20 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.data").value(nullValue()))
                 .andExpect(jsonPath("$.message").value("参数校验失败：name 名称不能为空"))
                 .andExpect(jsonPath("$.traceId").value(VALIDATION_TRACE_ID));
+    }
+
+    @Test
+    @WithMockUser
+    void unreadableRequestBodyShouldReturnUnifiedBadRequest() throws Exception {
+        mockMvc.perform(post("/test/exceptions/validation")
+                        .header("X-Trace-Id", UNREADABLE_BODY_TRACE_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                .andExpect(jsonPath("$.data").value(nullValue()))
+                .andExpect(jsonPath("$.message").value("请求体格式错误，请检查后重试"))
+                .andExpect(jsonPath("$.traceId").value(UNREADABLE_BODY_TRACE_ID));
     }
 
     @Test

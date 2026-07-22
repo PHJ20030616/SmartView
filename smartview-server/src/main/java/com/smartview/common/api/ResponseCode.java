@@ -26,6 +26,9 @@ public enum ResponseCode {
     /** 资源不存在 */
     NOT_FOUND("NOT_FOUND", "请求的资源不存在"),
 
+    /** 资源状态冲突 */
+    CONFLICT("CONFLICT", "资源状态冲突"),
+
     /** 业务逻辑错误 */
     BUSINESS_ERROR("BUSINESS_ERROR", "业务处理失败"),
 

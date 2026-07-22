@@ -1,11 +1,12 @@
 package com.smartview.config;
 
-import java.io.IOException;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.common.api.ApiResponse;
 import com.smartview.common.api.ResponseCode;
+import com.smartview.security.JwtAuthenticationFilter;
+import com.smartview.security.PublicEndpointRequestMatcher;
 import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -13,7 +14,10 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.web.servlet.handler.HandlerMappingIntrospector;
 
@@ -27,21 +31,6 @@ import org.springframework.web.servlet.handler.HandlerMappingIntrospector;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
-
-    /**
-     * 公开访问的端点路径
-     * <p>
-     * 这些端点无需认证即可访问，包括健康检查、API 文档等。
-     * </p>
-     */
-    private static final String[] PUBLIC_ENDPOINTS = {
-            "/api/health",
-            "/v3/api-docs",
-            "/v3/api-docs/**",
-            "/v3/api-docs.yaml",
-            "/swagger-ui.html",
-            "/swagger-ui/**"
-    };
 
     /**
      * 配置安全过滤器链
@@ -63,6 +52,8 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             ObjectMapper objectMapper,
+            JwtAuthenticationFilter jwtAuthenticationFilter,
+            PublicEndpointRequestMatcher publicEndpointRequestMatcher,
             HandlerMappingIntrospector handlerMappingIntrospector
     ) throws Exception {
         return http
@@ -71,7 +62,7 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
+                        .requestMatchers(publicEndpointRequestMatcher).permitAll()
                         .requestMatchers(apiNoHandlerRequestMatcher(handlerMappingIntrospector)).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptionHandling -> exceptionHandling
@@ -81,7 +72,18 @@ public class SecurityConfig {
                         .accessDeniedHandler((request, response, exception) ->
                                 writeErrorResponse(response, objectMapper, HttpServletResponse.SC_FORBIDDEN,
                                         ResponseCode.FORBIDDEN, "无权限访问该资源")))
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
+    }
+
+    /**
+     * BCrypt 每次编码都会生成随机盐，数据库只保存不可逆哈希。
+     *
+     * @return 密码编码器
+     */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
     }
 
     /**

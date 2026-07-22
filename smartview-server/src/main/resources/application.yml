@@ -69,7 +69,7 @@ smartview:
     secret-key: ${MINIO_ROOT_PASSWORD:smartview_minio_password}
     bucket: ${MINIO_BUCKET:smartview}
   jwt:
-    # 本地默认值仅用于开发启动；生产环境必须通过环境变量覆盖。
-    secret: ${JWT_SECRET:smartview-local-development-secret-change-me-at-least-32-bytes}
+    # 签名密钥禁止提供可预测回退值；未配置或强度不足时应用必须在启动阶段失败。
+    secret: ${JWT_SECRET:smartview}
     issuer: ${JWT_ISSUER:smartview}
     access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:7200}

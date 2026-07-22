@@ -1,7 +1,7 @@
 # Task 2.2 - 注册与登录接口实施计划
 
 **日期：** 2026-07-22  
-**状态：** 待用户确认  
+**状态：** 已完成（最终独立复审通过）
 **范围：** `smartview-server`、`contracts/web-api`
 
 ---
@@ -368,6 +368,111 @@ mvn clean test
 - 认证和校验提示使用中文。
 - 使用 H2 MySQL 兼容模式完成不依赖 Docker 的持久化集成测试。
 
-待确认：
+已确认：
 
-- 同意按照本计划开始修改契约、测试和业务代码。
+- 同意按照本计划修改契约、测试和业务代码。
+
+---
+
+## 13. 实际执行与验证记录
+
+### 13.1 核心实现
+
+- 已完成注册、登录和当前用户接口。
+- 密码仅以 BCrypt 哈希写入数据库，响应中不返回密码或密码哈希。
+- 登录成功签发 JWT，受保护接口缺少或携带无效 JWT 时返回统一 HTTP 401。
+- JWT 验证通过后仍重新读取数据库用户状态，已禁用、锁定、软删除或不存在的用户无法继续访问。
+- 用户名和邮箱在校验及持久化前统一规范为去除首尾空白的小写值，使数据库唯一索引能够稳定拦截并发大小写变体。
+- 请求体缺失或 JSON 畸形时返回统一 HTTP 400 中文错误响应，不暴露底层解析细节。
+- 登录成功只通过带 `ACTIVE` 和未删除条件的原子 SQL 更新最近登录时间，避免旧实体覆盖管理员并发修改的账号状态。
+- 注册和登录均按 UTF-8 字节数校验 BCrypt 的 72 字节输入上限，超限稳定返回 HTTP 422。
+
+### 13.2 第二轮修复测试
+
+定向红灯命令：
+
+```powershell
+mvn "-Dtest=AuthApiIntegrationTest,GlobalExceptionHandlerTest" test
+```
+
+红灯结果：25 个测试中 6 个按预期失败；5 个请求体不可读场景错误返回 500，
+并发注册 `smartuser` 与 `SMARTUSER` 时两个请求均成功，测试准确暴露了待修复问题。
+
+修复后执行相同命令：25/25 通过，失败 0，错误 0，跳过 0。
+
+### 13.3 完整回归
+
+由于本机 Maven 3.6.1 无法使用默认 clean 插件版本，使用明确版本执行干净构建：
+
+```powershell
+mvn org.apache.maven.plugins:maven-clean-plugin:3.3.2:clean test
+```
+
+执行结果：
+
+- OpenAPI Generator 7.14.0 从契约重新生成 `RegisterRequest`、`LoginRequest`、`LoginData` 和 `UserInfo`。
+- 生成的 `RegisterRequest.email` 包含 `@Size(max = 100)`。
+- 单元测试与集成测试共 39 个，39/39 通过。
+- 失败 0，错误 0，跳过 0，通过率 100%。
+
+最终状态将在全新独立审查通过并完成双远程推送后更新为“已完成”。
+
+### 13.4 第三轮安全修复
+
+最终复审发现并修复两个安全边界：
+
+1. 登录流程不再使用 `updateById` 写回登录开始时读取的完整用户实体，而是通过账号状态条件更新
+   `last_login_at`；更新行数为 0 时返回 HTTP 403，且不签发 JWT。
+2. OpenAPI 将注册、登录密码字符上限调整为 72；服务层额外按 UTF-8 字节数校验，
+   覆盖少量多字节字符超过 BCrypt 72 字节限制的情况。
+
+测试驱动记录：
+
+```powershell
+mvn "-Dtest=AuthServiceTest,AuthApiIntegrationTest" test
+```
+
+- 红灯：测试编译因缺少 `updateLastLoginAtIfActive` 失败，准确暴露原子条件更新能力缺失。
+- 绿灯：23/23 通过，失败 0，错误 0，跳过 0。
+- 干净全量回归：39/39 通过，失败 0，错误 0，跳过 0。
+
+### 13.5 第四轮过滤器异常边界修复
+
+独立审查发现 `JwtAuthenticationFilter` 原先把 `filterChain.doFilter` 包含在 JWT 异常捕获范围内，
+可能将下游业务抛出的 `IllegalArgumentException` 错误改写为 HTTP 401。
+
+修复内容：
+
+- 新增 `JwtAuthenticationFilterTest`，验证有效 JWT 通过认证后，下游参数异常必须原样传播。
+- JWT 异常捕获范围缩小到令牌解析过程，数据库和下游业务异常继续交给正常异常处理链。
+- 在关键边界添加中文安全注释，说明不得将下游异常误判为 JWT 校验失败。
+- 注册和登录密码字段在 OpenAPI 中标记为 `writeOnly: true`。
+
+测试驱动记录：
+
+```powershell
+mvn "-Dtest=JwtAuthenticationFilterTest" test
+```
+
+- 红灯：1 个测试按预期失败，证明旧实现吞掉了下游异常并尝试返回 401。
+- 绿灯：1/1 通过，失败 0，错误 0，跳过 0。
+
+最终干净全量回归：
+
+```powershell
+mvn org.apache.maven.plugins:maven-clean-plugin:3.3.2:clean test
+```
+
+- OpenAPI Generator 7.14.0 从契约重新生成 4 个 DTO。
+- 后端测试共 40 个，40/40 通过。
+- 失败 0，错误 0，跳过 0，通过率 100%。
+
+### 13.6 最终独立复审
+
+全新独立审查 Agent 最终结论为 **APPROVE**：
+
+- P0、P1、P2 问题均为 0。
+- 已确认 JWT 过滤器不会将下游 `IllegalArgumentException` 改写为 401。
+- 生成 DTO 的 `toString()` 仍包含密码字段被记录为 P3 非阻塞风险；当前业务代码不记录请求 DTO，
+  后续应通过生成器模板统一脱敏。
+- 邮箱和手机号软删除后二次复用属于既有迁移结构的非阻塞残余风险，不影响本任务验收。

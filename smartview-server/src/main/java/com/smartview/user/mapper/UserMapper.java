@@ -3,6 +3,10 @@ package com.smartview.user.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.smartview.user.entity.User;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
+
+import java.time.LocalDateTime;
 
 /**
  * 用户 Mapper 接口
@@ -34,6 +38,24 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface UserMapper extends BaseMapper<User> {
-    // 继承 BaseMapper 后自动获得 CRUD 方法，无需手动定义
-    // 如需自定义查询方法，可在此添加方法声明
+
+    /**
+     * 仅在账号仍可登录时更新最近登录时间。
+     *
+     * <p>状态和逻辑删除条件必须与更新时间写入处于同一条 SQL 中，避免管理员并发禁用账号后，
+     * 登录流程使用旧实体执行全字段更新并把账号状态错误恢复为 ACTIVE。</p>
+     *
+     * @return 更新行数；返回 0 表示账号状态已变化，不得继续签发令牌
+     */
+    @Update("""
+            UPDATE `user`
+            SET last_login_at = #{lastLoginAt}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = #{userId}
+              AND status = 'ACTIVE'
+              AND deleted = 0
+            """)
+    int updateLastLoginAtIfActive(
+            @Param("userId") Long userId,
+            @Param("lastLoginAt") LocalDateTime lastLoginAt
+    );
 }

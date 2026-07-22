@@ -59,9 +59,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponse'
+                $ref: '#/components/schemas/UserResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -85,8 +87,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
 
   /api/users/me:
     get:
@@ -464,15 +472,18 @@ components:
         password:
           type: string
           minLength: 6
-          maxLength: 128
-          description: 登录密码
+          maxLength: 72
+          writeOnly: true
+          description: 登录密码，UTF-8 编码后不得超过 BCrypt 的 72 字节限制
         nickname:
           type: string
+          minLength: 1
           maxLength: 64
           description: 用户昵称
         email:
           type: string
           format: email
+          maxLength: 100
           description: 邮箱（可选）
         phone:
           type: string
@@ -487,10 +498,15 @@ components:
       properties:
         username:
           type: string
+          minLength: 3
+          maxLength: 32
           description: 登录用户名
         password:
           type: string
-          description: 登录密码
+          minLength: 6
+          maxLength: 72
+          writeOnly: true
+          description: 登录密码，UTF-8 编码后不得超过 BCrypt 的 72 字节限制
 
     LoginResponse:
       allOf:
@@ -498,16 +514,30 @@ components:
         - type: object
           properties:
             data:
-              type: object
-              required:
-                - token
-                - user
-              properties:
-                token:
-                  type: string
-                  description: JWT Token
-                user:
-                  $ref: '#/components/schemas/UserInfo'
+              $ref: '#/components/schemas/LoginData'
+
+    LoginData:
+      type: object
+      required:
+        - token
+        - tokenType
+        - expiresIn
+        - user
+      properties:
+        token:
+          type: string
+          description: JWT 访问令牌
+        tokenType:
+          type: string
+          enum: [Bearer]
+          description: 令牌类型
+        expiresIn:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 访问令牌剩余有效期（秒）
+        user:
+          $ref: '#/components/schemas/UserInfo'
 
     UserResponse:
       allOf:
@@ -542,7 +572,7 @@ components:
           description: 手机号
         status:
           type: string
-          enum: [ACTIVE, DISABLED]
+          enum: [ACTIVE, DISABLED, LOCKED]
           description: 用户状态
         lastLoginAt:
           type: string
@@ -1011,7 +1041,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
 
     Conflict:
-      description: 并发冲突（乐观锁失败）
+      description: 资源状态冲突
       content:
         application/json:
           schema:
