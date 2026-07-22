@@ -4,55 +4,58 @@ import type {
   RegisterRequest,
   UserInfo,
 } from "./authTypes";
+import { authApi } from "../../api/authApi";
 
-const MOCK_DELAY_MS = 500;
+/**
+ * 用户注册
+ * 调用后端注册 API，解析响应并返回用户信息
+ */
+export async function register(request: RegisterRequest): Promise<UserInfo> {
+  try {
+    // 调用后端注册 API
+    const response = await authApi.register(request);
 
-function waitForMockResponse(): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, MOCK_DELAY_MS);
-  });
-}
+    // 后端返回 ApiResponse<UserInfo> 包装结构
+    // response.data 是 HTTP 响应体（UserResponse）
+    // response.data.data 是实际的用户信息（UserInfo）
+    const { data } = response.data;
 
-function createMockId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
+    if (!data) {
+      throw new Error('注册响应数据为空');
+    }
+
+    return data;
+  } catch (error) {
+    console.error('注册失败:', error);
+    throw error;
   }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 /**
- * Task 2.3 仅模拟前端交互，不保存账号或密码。
- * Task 2.4 接入后端时只需替换本适配器，页面与认证上下文保持不变。
+ * 用户登录
+ * 调用后端登录 API，解析响应并存储 token 和用户信息
  */
-export async function register(request: RegisterRequest): Promise<UserInfo> {
-  await waitForMockResponse();
-
-  return {
-    id: createMockId(),
-    username: request.username,
-    nickname: request.nickname,
-    email: request.email,
-    phone: request.phone,
-    status: "ACTIVE",
-    createdAt: new Date().toISOString(),
-  };
-}
-
 export async function login(request: LoginRequest): Promise<LoginData> {
-  await waitForMockResponse();
+  try {
+    // 调用后端登录 API
+    const response = await authApi.login(request);
 
-  return {
-    token: `mock-token-${createMockId()}`,
-    tokenType: "Bearer",
-    expiresIn: 7200,
-    user: {
-      id: createMockId(),
-      username: request.username,
-      nickname: request.username,
-      status: "ACTIVE",
-      lastLoginAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    },
-  };
+    // 后端返回 ApiResponse<LoginData> 包装结构
+    // response.data 是 HTTP 响应体（LoginResponse）
+    // response.data.data 是实际的登录数据（LoginData，包含 token 和 user）
+    const { data } = response.data;
+
+    if (!data) {
+      throw new Error('登录响应数据为空');
+    }
+
+    // 存储 token 和用户信息到 localStorage
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('user', JSON.stringify(data.user));
+
+    return data;
+  } catch (error) {
+    console.error('登录失败:', error);
+    throw error;
+  }
 }
