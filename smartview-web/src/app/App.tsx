@@ -14,7 +14,38 @@ import { router } from "./router";
 
 export default function App() {
   return (
-    <ConfigProvider locale={zhCN} theme={{ token: { borderRadius: 6 } }}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        token: {
+          borderRadius: 6,
+          colorPrimary: "#0f766e",
+          colorText: "#172033",
+          colorTextSecondary: "#667085",
+          controlHeight: 42,
+          fontFamily:
+            '"Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+          wireframe: false,
+        },
+        components: {
+          Button: {
+            controlHeight: 44,
+            fontWeight: 600,
+            primaryShadow: "none",
+          },
+          Form: {
+            itemMarginBottom: 15,
+            labelColor: "#344054",
+            labelFontSize: 13,
+          },
+          Input: {
+            activeBorderColor: "#0f766e",
+            activeShadow: "0 0 0 3px rgba(15, 118, 110, 0.10)",
+            hoverBorderColor: "#2b8c83",
+          },
+        },
+      }}
+    >
       <AntApp>
         <RouterProvider router={router} />
       </AntApp>

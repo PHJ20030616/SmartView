@@ -22,6 +22,9 @@ describe("认证回跳地址", () => {
   it.each([
     "https://evil.example",
     "//evil.example/path",
+    "/\\evil.example/path",
+    "/resume\\evil.example",
+    "/resume\n/evil.example",
     "javascript:alert(1)",
     "resume",
     "",

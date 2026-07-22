@@ -23,7 +23,11 @@ function isAuthSession(value: unknown): value is AuthSession {
   }
 
   const session = value as Partial<AuthSession>;
-  return typeof session.token === "string" && isUserInfo(session.user);
+  return (
+    typeof session.token === "string" &&
+    session.token.trim().length > 0 &&
+    isUserInfo(session.user)
+  );
 }
 
 function removePersistedSession(): void {

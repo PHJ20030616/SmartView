@@ -9,13 +9,15 @@
 import {
   FileTextOutlined,
   HomeOutlined,
+  LogoutOutlined,
   MessageOutlined,
   PieChartOutlined,
-  UserOutlined,
 } from "@ant-design/icons";
-import { Button, Layout, Menu, Space, Typography } from "antd";
+import { Button, Layout, Menu, Space, Tooltip, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+
+import { useAuth } from "../../features/auth";
 
 const { Header, Content, Sider } = Layout;
 
@@ -30,8 +32,15 @@ const menuItems: MenuProps["items"] = [
 export default function MainLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { logout, user } = useAuth();
   // 提取当前一级路由作为选中的菜单项
   const selectedKey = location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`;
+
+  const handleLogout = () => {
+    // 先清理内存与本地持久化会话，再替换历史记录，避免退出后通过返回键回到受保护页面。
+    logout();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <Layout className="app-shell">
@@ -51,9 +60,15 @@ export default function MainLayout() {
         <Header className="app-header">
           <Typography.Text strong>模拟面试工作台</Typography.Text>
           <Space>
-            <Button icon={<UserOutlined />} onClick={() => navigate("/login")}>
-              登录
-            </Button>
+            <Typography.Text>{user?.nickname ?? user?.username}</Typography.Text>
+            <Tooltip title="退出登录">
+              <Button
+                aria-label="退出登录"
+                icon={<LogoutOutlined aria-hidden="true" />}
+                onClick={handleLogout}
+                type="text"
+              />
+            </Tooltip>
           </Space>
         </Header>
         {/* 内容区域 */}

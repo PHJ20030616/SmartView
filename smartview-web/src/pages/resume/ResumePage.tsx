@@ -11,7 +11,7 @@ import { Button, Card, Space, Typography, Upload } from "antd";
 
 export default function ResumePage() {
   return (
-    <Space className="page-stack" direction="vertical" size={24}>
+    <Space className="page-stack" orientation="vertical" size={24}>
       <section>
         <Typography.Title level={2}>简历</Typography.Title>
         <Typography.Paragraph type="secondary">上传 PDF 简历后，系统会生成可确认的结构化画像。</Typography.Paragraph>

@@ -93,4 +93,34 @@ describe("认证请求客户端", () => {
 
     expect(redirectToExpiredLogin).toHaveBeenCalledTimes(1);
   });
+
+  it("旧会话请求延迟返回 401 时不会清除新会话", async () => {
+    let releaseOldRequest!: (response: [number, object]) => void;
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const oldResponse = new Promise<[number, object]>((resolve) => {
+      releaseOldRequest = resolve;
+    });
+    const nextSession = {
+      ...session,
+      token: "mock-token-new-session",
+    };
+
+    saveAuthSession(session, true);
+    mock.onGet("/secure/slow").reply(() => {
+      markRequestStarted();
+      return oldResponse;
+    });
+
+    const pendingRequest = request.get("/secure/slow");
+    await requestStarted;
+    saveAuthSession(nextSession, true);
+    releaseOldRequest([401, {}]);
+
+    await expect(pendingRequest).rejects.toBeTruthy();
+    expect(readAuthSession()).toEqual(nextSession);
+    expect(redirectToExpiredLogin).not.toHaveBeenCalled();
+  });
 });

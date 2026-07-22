@@ -38,7 +38,7 @@ export default function HomePage() {
   const navigate = useNavigate();
 
   return (
-    <Space className="page-stack" direction="vertical" size={24}>
+    <Space className="page-stack" orientation="vertical" size={24}>
       <section>
         <Typography.Title level={2}>首页</Typography.Title>
         <Typography.Paragraph type="secondary">从简历画像开始，完成一次可复盘的模拟面试。</Typography.Paragraph>
@@ -47,7 +47,7 @@ export default function HomePage() {
         {actions.map((action) => (
           <Col xs={24} md={8} key={action.path}>
             <Card className="workflow-card">
-              <Space direction="vertical" size={12}>
+              <Space orientation="vertical" size={12}>
                 <Typography.Title level={4}>{action.title}</Typography.Title>
                 <Typography.Paragraph type="secondary">{action.description}</Typography.Paragraph>
                 <Button icon={action.icon} onClick={() => navigate(action.path)} type="primary">

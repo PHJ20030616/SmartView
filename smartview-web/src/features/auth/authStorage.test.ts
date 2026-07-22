@@ -76,6 +76,19 @@ describe("认证会话存储", () => {
     expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
   });
 
+  it.each(["", "   "])("空白 Token 的本地会话不会恢复：%j", (token) => {
+    localStorage.setItem(
+      AUTH_STORAGE_KEY,
+      JSON.stringify({
+        ...session,
+        token,
+      }),
+    );
+
+    expect(readAuthSession()).toBeNull();
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+  });
+
   it("localStorage 写入失败时降级为内存会话", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("存储空间不可用");

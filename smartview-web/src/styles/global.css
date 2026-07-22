@@ -66,18 +66,6 @@ body {
   width: 100%;
 }
 
-.login-page {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: linear-gradient(135deg, #eef1f6 0%, #dff4ef 100%);
-}
-
-.login-panel {
-  width: min(100%, 420px);
-}
-
 @media (max-width: 768px) {
   .app-content {
     padding: 20px;

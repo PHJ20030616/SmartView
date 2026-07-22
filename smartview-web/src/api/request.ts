@@ -15,7 +15,7 @@ import {
   TRACE_ID_HEADER,
 } from "./http";
 
-let expiredRedirectStarted = false;
+let expiredRedirectToken: string | null = null;
 
 export const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
@@ -49,15 +49,22 @@ request.interceptors.response.use(
 
     const headers = new AxiosHeaders(error.config?.headers);
     const authorization = headers.get("Authorization");
-    const isAuthenticatedUnauthorized =
+    const failedToken =
+      typeof authorization === "string"
+        ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] ?? null
+        : null;
+    const isCurrentSessionUnauthorized =
       error.response?.status === 401 &&
-      typeof authorization === "string" &&
-      authorization.startsWith("Bearer ");
+      failedToken !== null &&
+      failedToken === getAuthToken();
 
-    if (isAuthenticatedUnauthorized && !expiredRedirectStarted) {
-      // 登录请求本身没有 Bearer Token，因此不会被误判为 Token 失效。
-      // 并发请求可能同时返回 401，模块级锁确保只清理和跳转一次。
-      expiredRedirectStarted = true;
+    if (
+      isCurrentSessionUnauthorized &&
+      failedToken !== expiredRedirectToken
+    ) {
+      // 只处理当前会话发出的 401，避免旧请求延迟返回后误清除用户刚建立的新会话。
+      // 首次处理会立即清空当前 Token，并发返回的相同 401 因此不会重复触发跳转。
+      expiredRedirectToken = failedToken;
       clearAuthSession();
       redirectToExpiredLogin();
     }
@@ -67,5 +74,5 @@ request.interceptors.response.use(
 );
 
 export function resetExpiredRedirectForTest(): void {
-  expiredRedirectStarted = false;
+  expiredRedirectToken = null;
 }

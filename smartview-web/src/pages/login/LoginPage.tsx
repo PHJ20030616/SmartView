@@ -1,51 +1,182 @@
-/**
- * 登录页面组件
- *
- * 提供用户登录表单，包含账号和密码输入。
- * 登录成功后跳转到首页。
- */
-import { LoginOutlined } from "@ant-design/icons";
-import { Button, Card, Form, Input, Typography } from "antd";
-import { useNavigate } from "react-router-dom";
+import {
+  ArrowRightOutlined,
+  LockOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
+import { Alert, App, Button, Checkbox, Form, Input } from "antd";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useState } from "react";
 
-/**
- * 登录表单数据类型
- */
-type LoginFormValues = {
-  username: string;
-  password: string;
+import {
+  getSafeRedirectPath,
+  useAuth,
+} from "../../features/auth";
+import type { LoginFormValues } from "../../features/auth/authTypes";
+import {
+  AUTH_PASSWORD_MAX_BYTES,
+  getUtf8ByteLength,
+  trimTextValue,
+} from "../../features/auth/authValidation";
+import AuthPageLayout from "./AuthPageLayout";
+
+type LoginLocationState = {
+  from?: unknown;
+  registeredUsername?: unknown;
 };
 
 export default function LoginPage() {
+  const { message } = App.useApp();
+  const { login } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const [submitting, setSubmitting] = useState(false);
+  const state = location.state as LoginLocationState | null;
+  const searchParams = new URLSearchParams(location.search);
+  const registeredUsername =
+    typeof state?.registeredUsername === "string"
+      ? state.registeredUsername
+      : "";
+  const redirectPath = getSafeRedirectPath(
+    state?.from ?? searchParams.get("redirect"),
+  );
+  const sessionExpired = searchParams.get("reason") === "expired";
 
   /**
-   * 处理登录表单提交
-   *
-   * @param _values - 表单值（包含用户名和密码）
+   * 页面只面向认证上下文提交凭据，Task 2.4 替换服务实现后无需改动表单流程。
+   * 回跳地址在进入 navigate 前统一经过站内路径校验，避免开放重定向。
    */
-  const handleFinish = (_values: LoginFormValues) => {
-    // TODO: 调用登录 API
-    navigate("/");
+  const handleFinish = async (values: LoginFormValues) => {
+    setSubmitting(true);
+    try {
+      const result = await login(
+        {
+          username: values.username.trim(),
+          password: values.password,
+        },
+        values.remember,
+      );
+
+      if (!result.persisted && values.remember) {
+        message.warning("当前为临时登录，刷新后需要重新登录");
+      } else {
+        message.success("登录成功");
+      }
+      navigate(redirectPath, { replace: true });
+    } catch {
+      message.error("登录失败，请检查账号和密码后重试");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <main className="login-page">
-      <Card className="login-panel">
-        <Typography.Title level={2}>登录 SmartView</Typography.Title>
-        <Typography.Paragraph type="secondary">进入模拟面试工作台，继续简历分析和面试练习。</Typography.Paragraph>
-        <Form<LoginFormValues> layout="vertical" onFinish={handleFinish}>
-          <Form.Item label="账号" name="username" rules={[{ required: true, message: "请输入账号" }]}>
-            <Input placeholder="请输入账号" autoComplete="username" />
-          </Form.Item>
-          <Form.Item label="密码" name="password" rules={[{ required: true, message: "请输入密码" }]}>
-            <Input.Password placeholder="请输入密码" autoComplete="current-password" />
-          </Form.Item>
-          <Button block htmlType="submit" icon={<LoginOutlined />} type="primary">
-            登录
-          </Button>
-        </Form>
-      </Card>
-    </main>
+    <AuthPageLayout
+      title="欢迎回来"
+      description="登录后继续你的训练与成长记录"
+      notice={
+        sessionExpired ? (
+          <Alert
+            className="auth-session-alert"
+            showIcon
+            title="登录状态已失效，请重新登录"
+            type="warning"
+          />
+        ) : undefined
+      }
+    >
+      <Form<LoginFormValues>
+        initialValues={{
+          remember: true,
+          username: registeredUsername,
+        }}
+        layout="vertical"
+        onFinish={handleFinish}
+        requiredMark={false}
+        scrollToFirstError
+      >
+        <Form.Item
+          label="用户名"
+          name="username"
+          rules={[
+            {
+              validator: (_, value) => {
+                const username = trimTextValue(value);
+                if (!username) {
+                  return Promise.reject(new Error("请输入用户名"));
+                }
+                if (username.length < 3) {
+                  return Promise.reject(
+                    new Error("用户名至少需要 3 个字符"),
+                  );
+                }
+                if (username.length > 32) {
+                  return Promise.reject(
+                    new Error("用户名不能超过 32 个字符"),
+                  );
+                }
+                return Promise.resolve();
+              },
+            },
+          ]}
+        >
+          <Input
+            autoComplete="username"
+            maxLength={32}
+            placeholder="请输入用户名"
+            prefix={<UserOutlined aria-hidden="true" />}
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="密码"
+          name="password"
+          rules={[
+            { required: true, message: "请输入密码" },
+            { min: 6, message: "密码至少需要 6 个字符" },
+            {
+              validator: (_, value: string | undefined) => {
+                if (
+                  !value ||
+                  getUtf8ByteLength(value) <= AUTH_PASSWORD_MAX_BYTES
+                ) {
+                  return Promise.resolve();
+                }
+                return Promise.reject(
+                  new Error("密码的 UTF-8 编码不能超过 72 字节"),
+                );
+              },
+            },
+          ]}
+        >
+          <Input.Password
+            autoComplete="current-password"
+            placeholder="请输入密码"
+            prefix={<LockOutlined aria-hidden="true" />}
+          />
+        </Form.Item>
+
+        <Form.Item name="remember" valuePropName="checked">
+          <Checkbox>保持登录状态</Checkbox>
+        </Form.Item>
+
+        <Button
+          aria-label="登录"
+          block
+          disabled={submitting}
+          htmlType="submit"
+          icon={<ArrowRightOutlined aria-hidden="true" />}
+          iconPlacement="end"
+          loading={submitting}
+          type="primary"
+        >
+          登录
+        </Button>
+      </Form>
+
+      <div className="auth-mode-switch">
+        <span>还没有账号？</span>
+        <Link to="/register">创建账户</Link>
+      </div>
+    </AuthPageLayout>
   );
 }
