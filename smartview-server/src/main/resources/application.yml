@@ -11,7 +11,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: ${MYSQL_JDBC_URL:jdbc:mysql://localhost:3306/smartview?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${MYSQL_USER:root}
-    password: ${MYSQL_ROOT_PASSWORD}
+    password: ${MYSQL_ROOT_PASSWORD:123456}
   # Flyway 数据库迁移配置
   flyway:
     enabled: true
@@ -70,6 +70,6 @@ smartview:
     bucket: ${MINIO_BUCKET:smartview}
   jwt:
     # 签名密钥禁止提供可预测回退值；未配置或强度不足时应用必须在启动阶段失败。
-    secret: ${JWT_SECRET:}
+    secret: ${JWT_SECRET:1234567890123456789012345678901234567890}
     issuer: ${JWT_ISSUER:smartview}
     access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:7200}
