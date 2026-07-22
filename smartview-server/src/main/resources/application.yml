@@ -70,6 +70,6 @@ smartview:
     bucket: ${MINIO_BUCKET:smartview}
   jwt:
     # 签名密钥禁止提供可预测回退值；未配置或强度不足时应用必须在启动阶段失败。
-    secret: ${JWT_SECRET:9sdfj723bsdf0923kjbsdfv72345bsdf02345bsdf92345bsdf}
+    secret: ${JWT_SECRET:}
     issuer: ${JWT_ISSUER:smartview}
     access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:7200}

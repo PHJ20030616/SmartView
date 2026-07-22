@@ -40,7 +40,6 @@ smartview-infra\.env
 *.local.properties
 application-local.yml
 application-local.yaml
-smartview-server\src\main\resources\application.yml
 
 # 日志文件
 *.log
@@ -106,6 +105,7 @@ chroma_db/
 # AI开发工具相关
 .claude/
 .codegraph/
+.superpowers/
 AGENTS.md
 
 # 临时验证脚本
