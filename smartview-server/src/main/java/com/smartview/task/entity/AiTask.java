@@ -97,7 +97,10 @@ public class AiTask {
      * - CLEANUP：清理任务
      *
      * 不同任务类型可能对应不同的 AI 模型、处理流程、超时时间
+     *
+     * 注意：数据库存储字符串，业务代码应使用 TaskType 枚举
      */
+    @TableField("task_type")
     private String taskType;
 
     /**
@@ -113,7 +116,10 @@ public class AiTask {
      * PENDING → PROCESSING → SUCCESS
      *                       → FAILED (retry_count >= max_retry)
      *                       → RETRYING (retry_count < max_retry) → PROCESSING → ...
+     *
+     * 注意：数据库存储字符串，业务代码应使用 TaskStatus 枚举
      */
+    @TableField("task_status")
     private String taskStatus;
 
     /**
@@ -123,7 +129,10 @@ public class AiTask {
      * - RESUME_FILE：简历文件（biz_id 指向 resume_file.id）
      * - INTERVIEW_SESSION：面试会话（biz_id 指向 interview_session.id，后续扩展）
      * - null：不关联具体业务实体的任务（如定期清理任务）
+     *
+     * 注意：数据库存储字符串，业务代码应使用 BizType 枚举
      */
+    @TableField("biz_type")
     private String bizType;
 
     /**
@@ -157,6 +166,7 @@ public class AiTask {
      *   }
      * }
      */
+    @TableField("request_payload_json")
     private String requestPayloadJson;
 
     /**
@@ -175,6 +185,7 @@ public class AiTask {
      *   "skills": {...}
      * }
      */
+    @TableField("result_payload_json")
     private String resultPayloadJson;
 
     /**

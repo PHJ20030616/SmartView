@@ -160,6 +160,9 @@ CREATE INDEX `idx_candidate_name` ON `resume_profile`(`candidate_name`);
 -- 软删除标记索引
 CREATE INDEX `idx_deleted` ON `resume_profile`(`deleted`);
 
+-- 简历文件ID和版本号联合唯一索引，防止同一文件产生重复版本号
+CREATE UNIQUE INDEX `uk_resume_file_id_version` ON `resume_profile`(`resume_file_id`, `version`);
+
 -- 用户ID外键约束
 ALTER TABLE `resume_profile` ADD CONSTRAINT `fk_resume_profile_user_id`
     FOREIGN KEY (`user_id`) REFERENCES `user`(`id`) ON DELETE CASCADE;

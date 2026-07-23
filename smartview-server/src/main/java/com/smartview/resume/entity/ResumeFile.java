@@ -102,7 +102,10 @@ public class ResumeFile {
      * - FAILED：解析失败（错误信息见 error_message 字段）
      *
      * 状态流转：PENDING → PROCESSING → SUCCESS/FAILED
+     *
+     * 注意：数据库存储字符串，业务代码应使用 ParseStatus 枚举
      */
+    @TableField("parse_status")
     private String parseStatus;
 
     /**

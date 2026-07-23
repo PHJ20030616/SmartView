@@ -88,6 +88,7 @@ public class ResumeProfile {
      *   "linkedin": "https://linkedin.com/in/zhangsan"
      * }
      */
+    @TableField("contact_info_json")
     private String contactInfoJson;
 
     /**
@@ -105,6 +106,7 @@ public class ResumeProfile {
      *   }
      * ]
      */
+    @TableField("education_json")
     private String educationJson;
 
     /**
@@ -122,6 +124,7 @@ public class ResumeProfile {
      *   }
      * ]
      */
+    @TableField("work_experience_json")
     private String workExperienceJson;
 
     /**
@@ -140,6 +143,7 @@ public class ResumeProfile {
      *   }
      * ]
      */
+    @TableField("project_experience_json")
     private String projectExperienceJson;
 
     /**
@@ -154,6 +158,7 @@ public class ResumeProfile {
      *   "softSkills": ["团队协作", "问题解决", "技术文档编写"]
      * }
      */
+    @TableField("skills_json")
     private String skillsJson;
 
     /**
@@ -165,6 +170,7 @@ public class ResumeProfile {
      * 3. 关键词搜索：支持全文检索
      * 4. 人工审核：当 AI 解析结果不准确时，人工对照原文修正
      */
+    @TableField("raw_text")
     private String rawText;
 
     /**
@@ -186,6 +192,7 @@ public class ResumeProfile {
      *   "summary": "5年Java开发经验，熟悉Spring生态..."
      * }
      */
+    @TableField("profile_json")
     private String profileJson;
 
     /**
@@ -197,7 +204,10 @@ public class ResumeProfile {
      * 业务规则：
      * - 只有已确认的画像才能用于后续的职位匹配、简历推荐等业务
      * - 未确认的画像可能包含 AI 解析错误，需要用户人工校验
+     *
+     * 注意：数据库存储字符串，业务代码应使用 ConfirmStatus 枚举
      */
+    @TableField("confirm_status")
     private String confirmStatus;
 
     /**
