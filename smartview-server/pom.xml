@@ -142,6 +142,8 @@
                 <executions>
                     <execution>
                         <id>generate-web-api-models</id>
+                        <!-- 绑定到 initialize 阶段，确保在任何编译、运行操作前都先生成代码 -->
+                        <phase>initialize</phase>
                         <goals>
                             <goal>generate</goal>
                         </goals>
@@ -194,6 +196,12 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.3.0</version>
+            </plugin>
+            <!-- 显式指定 clean 插件版本以兼容 Maven 3.6.1 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>3.2.0</version>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
