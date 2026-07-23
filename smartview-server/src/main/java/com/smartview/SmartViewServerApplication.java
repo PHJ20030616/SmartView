@@ -3,6 +3,7 @@ package com.smartview;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * SmartView 后端服务应用入口
@@ -14,10 +15,12 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  * 注解说明：
  * - @SpringBootApplication: 标识为 Spring Boot 应用，启用自动配置和组件扫描
  * - @ConfigurationPropertiesScan: 扫描并注册配置属性类（如 JwtProperties、MinioProperties）
+ * - @EnableScheduling: 启用 Spring 定时任务支持，用于定时重试失败的 AI 任务
  * </p>
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
+@EnableScheduling
 public class SmartViewServerApplication {
 
     /**
