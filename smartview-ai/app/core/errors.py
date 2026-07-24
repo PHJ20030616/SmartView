@@ -4,12 +4,22 @@
 定义自定义异常类和全局异常处理器,统一错误响应格式。
 """
 import logging
+from uuid import UUID
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
+
+
+class ErrorResponse(BaseModel):
+    """跨服务接口统一错误响应。"""
+
+    error: str
+    message: str
+    traceId: UUID
 
 
 class AppError(Exception):

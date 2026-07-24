@@ -1,4 +1,4 @@
-openapi: 3.0.3
+﻿openapi: 3.0.3
 info:
   title: SmartView AI API
   description: SmartView FastAPI AI 服务对 Spring Boot 暴露的 API 契约
@@ -20,9 +20,6 @@ tags:
     description: 面试问题生成和回答评估
   - name: 报告生成
     description: 面试报告生成
-
-security:
-  - apiKeyAuth: []
 
 paths:
   /api/v1/health:
@@ -53,8 +50,11 @@ paths:
     post:
       tags:
         - 简历解析
-      summary: 解析简历文件
+      summary: 解析简历 PDF
+      description: 调用统一 LangGraph 流程解析文本型或扫描型中文 PDF。
       operationId: parseResume
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -68,10 +68,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ParseResumeResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: 接口鉴权失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 请求参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
-          $ref: '#/components/responses/InternalServerError'
+          description: AI 服务鉴权配置缺失
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/profile/analyze:
     post:
@@ -79,6 +93,8 @@ paths:
         - 画像分析
       summary: 生成方向画像分析
       operationId: analyzeProfile
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -103,6 +119,8 @@ paths:
         - 面试流程
       summary: 生成阶段计划
       operationId: generateStagePlan
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -127,6 +145,8 @@ paths:
         - 面试流程
       summary: 生成首题
       operationId: generateFirstQuestion
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -151,6 +171,8 @@ paths:
         - 面试流程
       summary: 评估回答并生成候选池
       operationId: evaluateAnswer
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -175,6 +197,8 @@ paths:
         - 报告生成
       summary: 生成面试报告
       operationId: generateReport
+      security:
+        - APIKeyHeader: []
       requestBody:
         required: true
         content:
@@ -195,13 +219,134 @@ paths:
 
 components:
   securitySchemes:
-    apiKeyAuth:
+    APIKeyHeader:
       type: apiKey
       in: header
       name: X-API-Key
       description: 固定 API Key 认证
 
   schemas:
+    ContactInfo:
+      type: object
+      properties:
+        phone:
+          type: string
+          nullable: true
+          description: 手机号
+        email:
+          type: string
+          nullable: true
+          description: 邮箱
+        location:
+          type: string
+          nullable: true
+          description: 所在地
+
+    EducationExperience:
+      type: object
+      properties:
+        school:
+          type: string
+          nullable: true
+          description: 学校名称
+        degree:
+          type: string
+          nullable: true
+          description: 学历
+        major:
+          type: string
+          nullable: true
+          description: 专业
+        startDate:
+          type: string
+          nullable: true
+          description: 开始日期，保留简历原始格式
+        endDate:
+          type: string
+          nullable: true
+          description: 结束日期，保留简历原始格式
+
+    WorkExperience:
+      type: object
+      properties:
+        company:
+          type: string
+          nullable: true
+          description: 公司名称
+        position:
+          type: string
+          nullable: true
+          description: 职位名称
+        startDate:
+          type: string
+          nullable: true
+          description: 开始日期，保留简历原始格式
+        endDate:
+          type: string
+          nullable: true
+          description: 结束日期，保留简历原始格式
+        description:
+          type: string
+          nullable: true
+          description: 工作内容
+
+    ProjectExperience:
+      type: object
+      properties:
+        projectName:
+          type: string
+          nullable: true
+          description: 项目名称
+        role:
+          type: string
+          nullable: true
+          description: 项目中的角色
+        description:
+          type: string
+          nullable: true
+          description: 项目描述
+        techStack:
+          type: array
+          description: 使用的技术栈
+          items:
+            type: string
+
+    ResumeStructuredData:
+      type: object
+      properties:
+        candidateName:
+          type: string
+          nullable: true
+          description: 候选人姓名
+        contactInfo:
+          allOf:
+            - $ref: '#/components/schemas/ContactInfo'
+          nullable: true
+        education:
+          type: array
+          description: 教育经历
+          items:
+            $ref: '#/components/schemas/EducationExperience'
+        workExperience:
+          type: array
+          description: 工作经历
+          items:
+            $ref: '#/components/schemas/WorkExperience'
+        projectExperience:
+          type: array
+          description: 项目经历
+          items:
+            $ref: '#/components/schemas/ProjectExperience'
+        skills:
+          type: array
+          description: 技能列表
+          items:
+            type: string
+        rawText:
+          type: string
+          nullable: true
+          description: 简历原文
+
     ParseResumeRequest:
       type: object
       required:
@@ -211,10 +356,13 @@ components:
       properties:
         fileUrl:
           type: string
+          minLength: 1
+          maxLength: 2083
           format: uri
           description: MinIO 预签名 URL
         mimeType:
           type: string
+          enum: [application/pdf]
           description: 文件 MIME 类型
           example: application/pdf
         traceId:
@@ -232,65 +380,27 @@ components:
           description: 解析是否成功
         candidateName:
           type: string
+          nullable: true
           description: 候选人姓名
         contactInfo:
-          type: object
-          description: 联系方式
-          properties:
-            phone:
-              type: string
-            email:
-              type: string
-            location:
-              type: string
+          allOf:
+            - $ref: '#/components/schemas/ContactInfo'
+          nullable: true
         education:
           type: array
           description: 教育经历
           items:
-            type: object
-            properties:
-              school:
-                type: string
-              degree:
-                type: string
-              major:
-                type: string
-              startDate:
-                type: string
-              endDate:
-                type: string
+            $ref: '#/components/schemas/EducationExperience'
         workExperience:
           type: array
           description: 工作经历
           items:
-            type: object
-            properties:
-              company:
-                type: string
-              position:
-                type: string
-              startDate:
-                type: string
-              endDate:
-                type: string
-              description:
-                type: string
+            $ref: '#/components/schemas/WorkExperience'
         projectExperience:
           type: array
           description: 项目经历
           items:
-            type: object
-            properties:
-              projectName:
-                type: string
-              role:
-                type: string
-              description:
-                type: string
-              techStack:
-                type: array
-                items:
-                  type: string
+            $ref: '#/components/schemas/ProjectExperience'
         skills:
           type: array
           description: 技能列表
@@ -298,10 +408,31 @@ components:
             type: string
         rawText:
           type: string
+          nullable: true
           description: 简历原文
         errorMessage:
           type: string
+          nullable: true
           description: 解析失败原因
+    ErrorResponse:
+      type: object
+      title: ErrorResponse
+      description: 跨服务接口统一错误响应。
+      required:
+        - error
+        - message
+        - traceId
+      properties:
+        error:
+          type: string
+          title: Error
+        message:
+          type: string
+          title: Message
+        traceId:
+          type: string
+          format: uuid
+          title: Traceid
 
     AnalyzeProfileRequest:
       type: object
