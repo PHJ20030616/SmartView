@@ -34,6 +34,7 @@ hs_err_pid*
 
 # 环境变量和配置文件
 .env
+smartview-ai\.env
 smartview-infra\.env
 .env.local
 .env.*.local

@@ -1,6 +1,7 @@
 package com.smartview.resume.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.BizType;
 import com.smartview.common.enums.ParseStatus;
@@ -18,6 +19,9 @@ import com.smartview.task.mq.ResumeTaskProducer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.security.MessageDigest;
@@ -61,6 +65,7 @@ public class ResumeFileService {
     private final MinioService minioService;
     private final ResumeTaskProducer resumeTaskProducer;
     private final ResumeProperties resumeProperties;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 构造函数注入依赖
@@ -70,13 +75,15 @@ public class ResumeFileService {
             AiTaskMapper aiTaskMapper,
             MinioService minioService,
             ResumeTaskProducer resumeTaskProducer,
-            ResumeProperties resumeProperties
+            ResumeProperties resumeProperties,
+            TransactionTemplate transactionTemplate
     ) {
         this.resumeFileMapper = resumeFileMapper;
         this.aiTaskMapper = aiTaskMapper;
         this.minioService = minioService;
         this.resumeTaskProducer = resumeTaskProducer;
         this.resumeProperties = resumeProperties;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -106,17 +113,49 @@ public class ResumeFileService {
             // 5. 创建 AiTask 记录（事务内）
             AiTask aiTask = createAiTaskRecord(resumeFile);
 
-            // 6. MQ 投递（立即重试 3 次）
-            boolean mqSuccess = sendToMqWithRetry(resumeFile, aiTask);
+            // 6. 事务提交后投递 MQ 消息，防止 AI 在事务提交前返回结果导致消费者查不到任务
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try {
+                                boolean mqSuccess = sendToMqWithRetry(resumeFile, aiTask);
 
-            if (!mqSuccess) {
-                // MQ 投递失败，标记任务为 FAILED 但不回滚事务
-                aiTask.setTaskStatus(TaskStatus.FAILED.getCode());
-                aiTask.setErrorMessage("MQ 投递失败，已进入重试队列");
-                aiTaskMapper.updateById(aiTask);
-                log.warn("MQ 投递失败，resumeFileId={}, taskId={}, 等待定时任务重试",
-                        resumeFile.getId(), aiTask.getTaskId());
-            }
+                                if (mqSuccess) {
+                                    /*
+                                     * 初次投递成功后将任务切换为 RETRYING，使用 updated_at 作为投递租约。
+                                     * 不能继续保留 PENDING，否则消息消费延迟超过调度间隔时会被重复投递。
+                                     * 若消费者已经抢先写入 PROCESSING/SUCCESS，条件更新会自然放弃回写。
+                                     */
+                                    transactionTemplate.executeWithoutResult(status ->
+                                            markParseSent(aiTask));
+                                } else {
+                                    // MQ 投递失败，在新事务中同时标记任务和文件为 FAILED，
+                                    // 否则前端轮询会一直看到 PENDING，直到超时且无法展示真实原因。
+                                    // afterCommit 回调中外部事务已完成，需独立事务确保状态持久化
+                                    transactionTemplate.executeWithoutResult(status ->
+                                            markParseFailed(
+                                                    resumeFile, aiTask, "MQ 投递失败，已进入重试队列"));
+                                    log.warn("MQ 投递失败，resumeFileId={}, taskId={}, 等待定时任务重试",
+                                            resumeFile.getId(), aiTask.getTaskId());
+                                }
+                            } catch (Exception e) {
+                                // afterCommit 中的异常无法被外层 try-catch 捕获，
+                                // 必须在此处兜底处理，防止事务已提交后异常逃逸导致状态不一致
+                                log.error("MQ 投递发生未预期异常，resumeFileId={}, taskId={}",
+                                        resumeFile.getId(), aiTask.getTaskId(), e);
+                                // 尝试在新事务中标记任务失败
+                                try {
+                                    transactionTemplate.executeWithoutResult(status ->
+                                            markParseFailed(
+                                                    resumeFile, aiTask, "MQ 投递异常：" + e.getMessage()));
+                                } catch (Exception innerEx) {
+                                    log.error("标记任务失败也失败，resumeFileId={}, taskId={}",
+                                            resumeFile.getId(), aiTask.getTaskId(), innerEx);
+                                }
+                            }
+                        }
+                    });
 
             return resumeFile;
 
@@ -226,6 +265,7 @@ public class ResumeFileService {
     private ResumeFile createResumeFileRecord(MultipartFile file, Long userId, String objectKey, String fileHash) {
         ResumeFile resumeFile = ResumeFile.builder()
                 .userId(userId)
+                .uploadedAt(LocalDateTime.now())
                 .originalFilename(file.getOriginalFilename())
                 .objectKey(objectKey)
                 .fileHash(fileHash)
@@ -272,6 +312,113 @@ public class ResumeFileService {
         resumeFileMapper.updateById(resumeFile);
 
         return aiTask;
+    }
+
+    /**
+     * 记录初次 MQ 投递成功。
+     *
+     * <p>任务创建后先处于 PENDING，只有确认消息已交给 MQ 后才进入 RETRYING。
+     * RETRYING 在这里表示“投递租约仍有效”，并不代表 AI 已经返回失败结果；
+     * 这样调度器可以在租约过期后恢复投递，同时避免正常消费延迟导致重复投递。</p>
+     */
+    private void markParseSent(AiTask aiTask) {
+        int updated = aiTaskMapper.update(
+                null,
+                new UpdateWrapper<AiTask>()
+                        .eq("task_id", aiTask.getTaskId())
+                        .eq("task_status", TaskStatus.PENDING.getCode())
+                        .apply("(retry_count IS NULL OR retry_count = 0)")
+                        .isNull("finished_at")
+                        .set("task_status", TaskStatus.RETRYING.getCode())
+                        .set("retry_count", 0)
+                        .set("error_message", null)
+                        .set("updated_at", LocalDateTime.now())
+        );
+        if (updated == 0) {
+            log.info("初次 MQ 投递成功后的状态回写被并发状态变更跳过，taskId={}", aiTask.getTaskId());
+        }
+    }
+
+    /**
+     * 标记任务为失败状态
+     * 独立方法，可在新事务中执行（afterCommit 需要独立事务）
+     */
+    private void markParseFailed(ResumeFile resumeFile, AiTask aiTask, String errorMessage) {
+        AiTask currentTask = aiTaskMapper.selectOne(
+                new LambdaQueryWrapper<AiTask>()
+                        .eq(AiTask::getTaskId, aiTask.getTaskId())
+                        /*
+                         * afterCommit 补偿与结果消费者共享任务行锁，确保读取状态后到回写状态之间
+                         * 不会出现“先读到 PENDING、后把 SUCCESS 降级”的窗口。
+                         */
+                        .last("FOR UPDATE"));
+        if (currentTask == null) {
+            log.warn("MQ 投递失败后未找到任务，跳过状态补偿，taskId={}", aiTask.getTaskId());
+            return;
+        }
+
+        int maxRetry = currentTask.getMaxRetry() == null
+                ? resumeProperties.getMq().getMaxScheduledRetryCount()
+                : currentTask.getMaxRetry();
+        int retryCount = currentTask.getRetryCount() == null ? 0 : currentTask.getRetryCount();
+        boolean retryable = retryCount < maxRetry;
+        String nextTaskStatus = retryable
+                ? TaskStatus.RETRYING.getCode()
+                : TaskStatus.FAILED.getCode();
+
+        /*
+         * MQ 发送结果存在“消息已到达但生产者超时”的不确定窗口。
+         * 使用带状态条件的更新，避免把结果消费者刚写入的 SUCCESS 降级为失败。
+         */
+        int taskUpdated = aiTaskMapper.update(
+                null,
+                new UpdateWrapper<AiTask>()
+                        .eq("task_id", currentTask.getTaskId())
+                        /*
+                         * 该补偿只属于上传后的首次投递。若任务已经进入 RETRYING/FAILED，
+                         * 说明消费者或调度器已经处理过，不能用“MQ 投递失败”覆盖真实错误。
+                         */
+                        .eq("task_status", TaskStatus.PENDING.getCode())
+                        .apply("(retry_count IS NULL OR retry_count = 0)")
+                        .isNull("finished_at")
+                        .isNull("error_message")
+                        .set("max_retry", maxRetry)
+                        .set("task_status", nextTaskStatus)
+                        .set("error_message", errorMessage)
+                        .set("finished_at", retryable ? null : LocalDateTime.now())
+                        .set("updated_at", LocalDateTime.now())
+        );
+        if (taskUpdated == 0) {
+            log.info("MQ 投递失败补偿跳过已完成任务，taskId={}", currentTask.getTaskId());
+            return;
+        }
+
+        Long resumeFileId = currentTask.getBizId() != null
+                ? currentTask.getBizId()
+                : resumeFile.getId();
+        if (resumeFileId == null) {
+            log.warn("MQ 投递失败补偿缺少简历文件 ID，taskId={}", currentTask.getTaskId());
+            return;
+        }
+
+        /*
+         * 可重试失败必须保持 PENDING，否则前端会立即停止轮询；
+         * 只有没有剩余调度重试次数时才向用户展示最终 FAILED。
+         * 同样使用条件更新，防止并发成功结果被覆盖。
+         */
+        resumeFileMapper.update(
+                null,
+                new UpdateWrapper<ResumeFile>()
+                        .eq("id", resumeFileId)
+                        .eq("parse_task_id", currentTask.getTaskId())
+                        .eq("parse_status", ParseStatus.PENDING.getCode())
+                        .set("parse_status",
+                                retryable
+                                        ? ParseStatus.PENDING.getCode()
+                                        : ParseStatus.FAILED.getCode())
+                        .set("error_message", retryable ? null : errorMessage)
+                        .set("updated_at", LocalDateTime.now())
+        );
     }
 
     /**

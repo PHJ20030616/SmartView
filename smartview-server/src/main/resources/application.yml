@@ -1,7 +1,18 @@
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    part:
+      max-file-size: 10MB
+      max-request-size: 100MB
 
 spring:
+
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 100MB
+      file-size-threshold: 0
   application:
     name: smartview-server
   mvc:
@@ -25,6 +36,7 @@ spring:
     encoding: UTF-8
     # 校验已应用的迁移脚本是否被修改（生产环境建议开启）
     validate-on-migrate: true
+
   data:
     redis:
       host: ${REDIS_HOST:localhost}

@@ -25,6 +25,7 @@ import InterviewPage from "../pages/interview/InterviewPage";
 import LoginPage from "../pages/login/LoginPage";
 import RegisterPage from "../pages/login/RegisterPage";
 import ReportPage from "../pages/report/ReportPage";
+import ResumeConfirmPage from "../pages/resume/ResumeConfirmPage";
 import ResumePage from "../pages/resume/ResumePage";
 
 export const appRoutes: RouteObject[] = [
@@ -51,6 +52,7 @@ export const appRoutes: RouteObject[] = [
             children: [
               { index: true, element: <HomePage /> },
               { path: "resume", element: <ResumePage /> },
+              { path: "resume/confirm/:profileId", element: <ResumeConfirmPage /> },
               { path: "interview", element: <InterviewPage /> },
               { path: "report", element: <ReportPage /> },
             ],

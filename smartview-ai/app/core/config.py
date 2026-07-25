@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # DeepSeek 配置。密钥使用 SecretStr，避免在配置对象 repr 或异常信息中意外泄露。
     deepseek_api_key: SecretStr = Field(default=SecretStr(""))
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-flash"
     deepseek_timeout_seconds: float = Field(default=60.0, gt=0)
     deepseek_max_tokens: int = Field(default=4096, gt=0)
     deepseek_temperature: float = Field(default=0.1, ge=0, le=2)

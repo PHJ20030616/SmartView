@@ -384,6 +384,8 @@ export interface components {
             parseStatus: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED";
             /** @description 解析任务 ID */
             parseTaskId?: string;
+            /** @description 解析成功后关联的简历画像 ID */
+            profileId?: string;
             /** @description 解析失败原因 */
             errorMessage?: string;
             /**
@@ -410,13 +412,21 @@ export interface components {
             /** @description 候选人姓名 */
             candidateName?: string;
             /** @description 联系方式 */
-            contactInfo?: Record<string, never>;
+            contactInfo?: {
+                [key: string]: unknown;
+            };
             /** @description 教育经历 */
-            education?: Record<string, never>[];
+            education?: {
+                [key: string]: unknown;
+            }[];
             /** @description 工作经历 */
-            workExperience?: Record<string, never>[];
+            workExperience?: {
+                [key: string]: unknown;
+            }[];
             /** @description 项目经历 */
-            projectExperience?: Record<string, never>[];
+            projectExperience?: {
+                [key: string]: unknown;
+            }[];
             /** @description 技能列表 */
             skills?: string[];
             /** @description 简历原文 */
@@ -443,7 +453,9 @@ export interface components {
             /** @description 候选人姓名 */
             candidateName?: string;
             /** @description 联系方式 */
-            contactInfo?: Record<string, never>;
+            contactInfo?: {
+                [key: string]: unknown;
+            };
             /** @description 技能列表 */
             skills?: string[];
         };
@@ -936,7 +948,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse"];
+                    "application/json": components["schemas"]["ResumeProfileResponse"];
                 };
             };
             404: components["responses"]["NotFound"];

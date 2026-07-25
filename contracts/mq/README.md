@@ -46,7 +46,7 @@
 | messageType | 队列名称 | 说明 |
 |------------|---------|------|
 | RESUME_PARSE_TASK | smartview.resume.parse.task | 简历解析任务 |
-| RESUME_PARSE_RESULT | smartview.resume.parse.result | 简历解析结果 |
+| RESUME_PARSE_RESULT | smartview.resume.parse.result.v1 | 简历解析结果 |
 | RESUME_VECTORIZE_TASK | smartview.resume.vectorize.task | 简历向量化任务 |
 | RESUME_VECTORIZE_RESULT | smartview.resume.vectorize.result | 简历向量化结果 |
 | PROFILE_ANALYZE_TASK | smartview.profile.analyze.task | 画像分析任务 |

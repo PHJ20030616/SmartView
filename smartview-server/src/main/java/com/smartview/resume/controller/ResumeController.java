@@ -3,6 +3,7 @@ package com.smartview.resume.controller;
 import com.smartview.common.api.ApiResponse;
 import com.smartview.resume.dto.ResumeFileDto;
 import com.smartview.resume.service.ResumeFileService;
+import com.smartview.resume.service.ResumeProfileService;
 import com.smartview.security.SecurityContextHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -35,14 +36,17 @@ import org.springframework.web.multipart.MultipartFile;
 public class ResumeController {
 
     private final ResumeFileService resumeFileService;
+    private final ResumeProfileService resumeProfileService;
 
     /**
      * 构造函数注入依赖
      *
-     * @param resumeFileService 简历文件服务
+     * @param resumeFileService    简历文件服务
+     * @param resumeProfileService 简历画像服务（用于关联查询 profileId）
      */
-    public ResumeController(ResumeFileService resumeFileService) {
+    public ResumeController(ResumeFileService resumeFileService, ResumeProfileService resumeProfileService) {
         this.resumeFileService = resumeFileService;
+        this.resumeProfileService = resumeProfileService;
     }
 
     /**
@@ -128,6 +132,13 @@ public class ResumeController {
      * @return 契约 DTO
      */
     private ResumeFileDto convertToDto(com.smartview.resume.entity.ResumeFile entity) {
+        // 解析成功后查询关联的画像 ID，便于前端跳转到确认页面
+        String profileId = null;
+        if ("SUCCESS".equals(entity.getParseStatus())) {
+            Long pid = resumeProfileService.findLatestProfileIdByFileId(entity.getId());
+            profileId = pid != null ? pid.toString() : null;
+        }
+
         return ResumeFileDto.builder()
                 .id(entity.getId().toString())
                 .userId(entity.getUserId().toString())
@@ -137,6 +148,7 @@ public class ResumeController {
                 .parseStatus(entity.getParseStatus())
                 .parseTaskId(entity.getParseTaskId())
                 .errorMessage(entity.getErrorMessage())
+                .profileId(profileId)
                 .uploadedAt(entity.getUploadedAt())
                 .createdAt(entity.getCreatedAt())
                 .build();

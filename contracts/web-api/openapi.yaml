@@ -234,7 +234,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponse'
+                $ref: '#/components/schemas/ResumeProfileResponse'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -622,6 +622,9 @@ components:
         parseTaskId:
           type: string
           description: 解析任务 ID
+        profileId:
+          type: string
+          description: 解析成功后关联的简历画像 ID
         errorMessage:
           type: string
           description: 解析失败原因
@@ -664,21 +667,25 @@ components:
           description: 候选人姓名
         contactInfo:
           type: object
+          additionalProperties: true
           description: 联系方式
         education:
           type: array
           items:
             type: object
+            additionalProperties: true
           description: 教育经历
         workExperience:
           type: array
           items:
             type: object
+            additionalProperties: true
           description: 工作经历
         projectExperience:
           type: array
           items:
             type: object
+            additionalProperties: true
           description: 项目经历
         skills:
           type: array
@@ -712,6 +719,7 @@ components:
           description: 候选人姓名
         contactInfo:
           type: object
+          additionalProperties: true
           description: 联系方式
         skills:
           type: array

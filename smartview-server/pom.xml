@@ -131,9 +131,28 @@
             <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- JSON Schema 校验器 -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.6</version>
+        </dependency>
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- 将契约文件（JSON Schema）复制到 classpath，供运行时校验使用 -->
+            <resource>
+                <directory>../contracts</directory>
+                <includes>
+                    <include>mq/*.schema.json</include>
+                </includes>
+                <targetPath>contracts</targetPath>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.openapitools</groupId>

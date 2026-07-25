@@ -4,10 +4,20 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.retry.backoff.ExponentialBackOffPolicy;
+import org.springframework.retry.interceptor.RetryOperationsInterceptor;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
+
+import java.util.Map;
 
 /**
  * RabbitMQ 配置类
@@ -15,19 +25,21 @@ import org.springframework.context.annotation.Configuration;
  * 功能说明：
  * - 配置 RabbitMQ 的 Exchange、Queue、Binding
  * - 配置消息序列化器（使用 Jackson 将消息转换为 JSON）
+ * - 配置结果队列的死信队列（DLQ）和有界重试策略，防止系统异常导致无限重新入队
  * - 确保 Spring Boot 启动时自动创建所需的交换机和队列
  *
  * 技术要点：
  * - DirectExchange：直连交换机，根据 routing key 精确匹配队列
  * - Queue：消息队列，durable=true 表示持久化（服务重启后队列不丢失）
  * - Binding：绑定关系，将队列绑定到交换机，并指定 routing key
- * - Jackson2JsonMessageConverter：使用 Jackson 序列化消息为 JSON 格式
+ * - Jackson2JsonMessageConverter：使用 Jackson 序列化/反序列化消息为 JSON 格式
+ * - 死信队列：结果队列配置 x-dead-letter-exchange，重试耗尽后消息转入 DLQ 避免无限循环
+ * - ExponentialBackOffPolicy：指数退避重试策略（1s → 2s → 4s），最大重试 3 次
  *
  * 消息路由：
- * - Exchange: smartview.direct
- * - Queue: smartview.resume.parse
- * - Routing Key: resume.parse.task
- * - Spring Boot → Exchange → Queue → FastAPI AI 服务
+ * - Spring Boot → Exchange → smartview.resume.parse（任务队列）→ FastAPI AI 服务
+ * - FastAPI AI 服务 → Exchange → smartview.resume.parse.result.v1（结果队列）→ Spring Boot
+ * - 消费失败超限 → smartview.resume.parse.result.dlq（死信队列，人工处理）
  *
  * @author SmartView Team
  * @since 2026-07-23
@@ -35,53 +47,77 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RabbitMQConfig {
 
-    /**
-     * 交换机名称
-     */
+    // ==================== 交换机和任务队列常量 ====================
+
     public static final String EXCHANGE_SMARTVIEW_DIRECT = "smartview.direct";
 
-    /**
-     * 简历解析队列名称
-     */
     public static final String QUEUE_RESUME_PARSE = "smartview.resume.parse";
-
-    /**
-     * 简历解析路由键
-     */
     public static final String ROUTING_KEY_RESUME_PARSE = "resume.parse.task";
 
+    // ==================== 结果队列及死信队列常量 ====================
+
     /**
-     * 创建直连交换机
-     * durable=true：交换机持久化，RabbitMQ 重启后仍存在
-     * autoDelete=false：没有队列绑定时也不自动删除
-     *
-     * @return DirectExchange 实例
+     * 简历解析结果队列名称
+     * FastAPI AI 服务解析完成后将结果投递到此队列
+     * 使用 v1 后缀避免旧版本无 DLX 参数的队列与新版本参数冲突导致 Broker 声明失败；
+     * 首次部署或旧队列已手动删除时可移除后缀
      */
+    public static final String QUEUE_RESUME_PARSE_RESULT = "smartview.resume.parse.result.v1";
+
+    /**
+     * 简历解析结果路由键
+     */
+    public static final String ROUTING_KEY_RESUME_PARSE_RESULT = "resume.parse.result";
+
+    /**
+     * 死信交换机，所有队列的重试耗尽消息统一路由到此
+     */
+    private static final String DLX_EXCHANGE = "smartview.dlx";
+
+    /**
+     * 结果队列的死信队列
+     */
+    private static final String QUEUE_RESUME_PARSE_RESULT_DLQ = "smartview.resume.parse.result.dlq";
+
+    /**
+     * 结果队列的死信路由键
+     */
+    private static final String ROUTING_KEY_RESUME_PARSE_RESULT_DLQ = "resume.parse.result.dlq";
+
+    /**
+     * 最大处理次数（首次消费 + 3 次重试 = 共 4 次机会）
+     * SimpleRetryPolicy.setMaxAttempts 表示总尝试次数，包含首次消费
+     */
+    private static final int MAX_RETRY_ATTEMPTS = 4;
+
+    /**
+     * 指数退避初始间隔（毫秒）
+     */
+    private static final long INITIAL_BACKOFF_INTERVAL_MS = 1000;
+
+    // ==================== Exchange ====================
+
     @Bean
     public DirectExchange smartviewDirectExchange() {
         return new DirectExchange(EXCHANGE_SMARTVIEW_DIRECT, true, false);
     }
 
     /**
-     * 创建简历解析队列
-     * durable=true：队列持久化，RabbitMQ 重启后仍存在
-     * exclusive=false：非独占队列，可被多个连接访问
-     * autoDelete=false：消费者断开后队列不自动删除
-     *
-     * @return Queue 实例
+     * 创建死信交换机
+     * 所有重试耗尽的消息统一路由到此交换机，再分发到各 DLQ
      */
+    @Bean
+    public DirectExchange deadLetterExchange() {
+        return new DirectExchange(DLX_EXCHANGE, true, false);
+    }
+
+    // ==================== 任务队列（Spring Boot → FastAPI） ====================
+
     @Bean
     public Queue resumeParseQueue() {
         return new Queue(QUEUE_RESUME_PARSE, true, false, false);
     }
 
-    /**
-     * 绑定简历解析队列到交换机
-     * 使用 routing key: resume.parse.task
-     * Spring Boot 发送消息时指定此 routing key，RabbitMQ 自动路由到对应队列
-     *
-     * @return Binding 实例
-     */
     @Bean
     public Binding resumeParseBinding() {
         return BindingBuilder
@@ -90,13 +126,109 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_RESUME_PARSE);
     }
 
+    // ==================== 结果队列（FastAPI → Spring Boot） ====================
+
     /**
-     * 配置消息序列化器
-     * 使用 Jackson 将 Java 对象序列化为 JSON 格式
-     * 消费者（FastAPI）接收到的是 JSON 字符串，易于跨语言解析
-     *
-     * @return Jackson2JsonMessageConverter 实例
+     * 创建简历解析结果队列
+     * 配置死信交换机，消费者抛出不可恢复异常超限后消息转入 DLQ
      */
+    @Bean
+    public Queue resumeParseResultQueue() {
+        return QueueBuilder.durable(QUEUE_RESUME_PARSE_RESULT)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_RESUME_PARSE_RESULT_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding resumeParseResultBinding() {
+        return BindingBuilder
+                .bind(resumeParseResultQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_RESUME_PARSE_RESULT);
+    }
+
+    // ==================== 结果死信队列 ====================
+
+    /**
+     * 创建结果队列的死信队列
+     * 重试耗尽的消息存放于此，需人工或定时任务消费/告警
+     */
+    @Bean
+    public Queue resumeParseResultDlq() {
+        return new Queue(QUEUE_RESUME_PARSE_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding resumeParseResultDlqBinding() {
+        return BindingBuilder
+                .bind(resumeParseResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_RESUME_PARSE_RESULT_DLQ);
+    }
+
+    // ==================== 消费者容器工厂（带重试拦截器） ====================
+
+    /**
+     * 配置 RabbitMQ 监听器容器工厂
+     * - Jackson JSON 转换器，自动将 JSON 消息反序列化为 Java 对象
+     * - RetryOperationsInterceptor：有界重试 + 指数退避，重试耗尽后消息进入 DLQ
+     *
+     * @param connectionFactory RabbitMQ 连接工厂
+     * @return SimpleRabbitListenerContainerFactory 实例
+     */
+    @Bean
+    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(jsonMessageConverter());
+        // 注册重试拦截器：系统异常最多重试 3 次，指数退避 1s→2s→4s
+        factory.setAdviceChain(retryOperationsInterceptor());
+        return factory;
+    }
+
+    /**
+     * 构建有界重试拦截器
+     * 消费者抛出 RuntimeException 时触发重试，BusinessException 已由消费者自行 ACK 不重试
+     *
+     * 重试策略：
+     * - setMaxAttempts(4)：首次消费 + 3 次重试 = 共 4 次处理机会
+     * - 指数退避间隔：1s → 2s → 4s（三次重试间隔）
+     * - 业务拒绝异常不重试，直接由队列拒绝并路由到 DLQ
+     * - 其他系统异常重试耗尽后抛出 AmqpRejectAndDontRequeueException，由 DLQ 接收
+     */
+    @Bean
+    public RetryOperationsInterceptor retryOperationsInterceptor() {
+        RetryTemplate retryTemplate = new RetryTemplate();
+
+        // 退避策略：指数递增，初始 1s，最大 1s * 2^2 = 4s
+        ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
+        backOffPolicy.setInitialInterval(INITIAL_BACKOFF_INTERVAL_MS);
+        backOffPolicy.setMultiplier(2.0);
+        backOffPolicy.setMaxInterval(INITIAL_BACKOFF_INTERVAL_MS * 4);
+        retryTemplate.setBackOffPolicy(backOffPolicy);
+
+        // 明确排除不可恢复异常，避免业务消息先被重复处理多次再进入 DLQ。
+        // traverseCauses=true 兼容异常被监听器包装后的场景。
+        Map<Class<? extends Throwable>, Boolean> retryableExceptions = Map.of(
+                org.springframework.amqp.AmqpRejectAndDontRequeueException.class, false);
+        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(
+                MAX_RETRY_ATTEMPTS, retryableExceptions, true);
+        retryTemplate.setRetryPolicy(retryPolicy);
+
+        RetryOperationsInterceptor interceptor = new RetryOperationsInterceptor();
+        interceptor.setRetryOperations(retryTemplate);
+        // recoverer 为 RejectAndDontRequeue：重试耗尽后拒绝消息，触发 DLQ 路由
+        interceptor.setRecoverer((args, cause) -> {
+            throw new org.springframework.amqp.AmqpRejectAndDontRequeueException(
+                    "重试耗尽（" + MAX_RETRY_ATTEMPTS + " 次），消息转入 DLQ", cause);
+        });
+        return interceptor;
+    }
+
+    // ==================== 消息转换器 ====================
+
     @Bean
     public MessageConverter jsonMessageConverter() {
         return new Jackson2JsonMessageConverter();

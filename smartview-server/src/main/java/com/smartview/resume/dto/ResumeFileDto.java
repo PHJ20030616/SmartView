@@ -70,6 +70,13 @@ public class ResumeFileDto {
     private String errorMessage;
 
     /**
+     * 关联的简历画像 ID（解析成功时填充）
+     * 用于前端在解析完成后直接跳转到确认页面
+     * 取自 resume_profile 表中该文件的最新版本画像
+     */
+    private String profileId;
+
+    /**
      * 上传时间
      */
     private LocalDateTime uploadedAt;

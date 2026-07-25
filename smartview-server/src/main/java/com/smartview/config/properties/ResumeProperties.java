@@ -75,7 +75,7 @@ public class ResumeProperties {
 
         /**
          * 定时任务最大重试次数
-         * 默认 3 次，超过后标记为 PERMANENTLY_FAILED
+         * 默认 3 次，超过后记录最终失败时间并停止调度
          * 避免无效任务反复重试浪费资源
          */
         private Integer maxScheduledRetryCount = 3;
