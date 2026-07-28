@@ -3,6 +3,7 @@ package com.smartview.infra.minio;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.properties.MinioProperties;
 import io.minio.*;
+import io.minio.Http.Method;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * - 支持文件路径规划（按业务模块和用户 ID 组织目录结构）
  *
  * 技术要点：
- * - 使用 MinIO Java SDK 8.5.x
+ * - 使用 MinIO Java SDK 9.0.3
  * - 文件路径格式：{module}/{userId}/{uuid}.{extension}
  * - 预签名 URL 有效期默认 1 小时，避免链接泄露风险
  * - 删除操作幂等，文件不存在时不抛异常
@@ -148,6 +149,8 @@ public class MinioService {
     public String generatePresignedUrl(String objectKey, int expiryHours) {
         try {
             GetPresignedObjectUrlArgs args = GetPresignedObjectUrlArgs.builder()
+                    // MinIO 9.x 要求预签名请求显式指定 HTTP 方法，否则构建参数时会因 method=null 失败。
+                    .method(Method.GET)
                     .bucket(minioProperties.getBucket())
                     .object(objectKey)
                     .expiry(expiryHours, TimeUnit.HOURS)
