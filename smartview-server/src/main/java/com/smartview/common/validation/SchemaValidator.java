@@ -45,6 +45,13 @@ public class SchemaValidator {
      * 简历解析结果 Schema，启动时强制加载，null 表示应用启动未完成
      */
     private JsonSchema resumeParseResultSchema;
+    /**
+     * 简历向量入库结果 Schema，启动时强制加载。
+     *
+     * 向量结果会直接驱动 ai_task 的终态更新，必须先通过契约校验，
+     * 避免格式错误或旧版本字段误写任务状态。
+     */
+    private JsonSchema resumeVectorizeResultSchema;
 
     public SchemaValidator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -68,7 +75,13 @@ public class SchemaValidator {
                     "无法加载 resume_parse_result.schema.json，"
                             + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
         }
-        log.info("resume_parse_result Schema 加载成功");
+        resumeVectorizeResultSchema = loadSchema("/contracts/mq/resume_vectorize_result.schema.json");
+        if (resumeVectorizeResultSchema == null) {
+            throw new IllegalStateException(
+                    "无法加载 resume_vectorize_result.schema.json，"
+                            + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
+        }
+        log.info("resume_parse_result 和 resume_vectorize_result Schema 加载成功");
     }
 
     /**
@@ -80,9 +93,26 @@ public class SchemaValidator {
      */
     public void validateResumeParseResult(Object message) {
         // 使用 NON_NULL 序列化器，避免可选字段的 null 值触发 Schema 类型错误
-        JsonNode jsonNode = schemaValidationMapper.valueToTree(message);
-        Set<ValidationMessage> errors = resumeParseResultSchema.validate(jsonNode);
+        validate(message, resumeParseResultSchema);
+    }
 
+    /**
+     * 校验简历向量入库结果消息是否符合契约定义。
+     *
+     * @param message 待校验的消息对象
+     * @throws IllegalArgumentException 校验失败时抛出
+     */
+    public void validateResumeVectorizeResult(Object message) {
+        validate(message, resumeVectorizeResultSchema);
+    }
+
+    /**
+     * 统一执行 Schema 校验，确保两个 MQ 结果消费者使用一致的错误处理逻辑。
+     */
+    private void validate(Object message, JsonSchema schema) {
+        // 使用 NON_NULL 序列化器，避免可选字段的 null 值触发 Schema 类型错误
+        JsonNode jsonNode = schemaValidationMapper.valueToTree(message);
+        Set<ValidationMessage> errors = schema.validate(jsonNode);
         if (!errors.isEmpty()) {
             String errorDetails = errors.stream()
                     .map(ValidationMessage::getMessage)

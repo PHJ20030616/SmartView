@@ -51,7 +51,14 @@
     },
     "profileVersion": {
       "type": "integer",
+      "minimum": 1,
       "description": "简历画像版本号"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["UPSERT", "DELETE"],
+      "default": "UPSERT",
+      "description": "向量操作类型；缺省时按 UPSERT 兼容历史消息"
     }
   }
 }

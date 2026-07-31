@@ -11,6 +11,7 @@
     "retryCount",
     "createdAt",
     "resumeProfileId",
+    "profileVersion",
     "success"
   ],
   "properties": {
@@ -49,17 +50,64 @@
       "type": "string",
       "description": "简历画像 ID"
     },
+    "profileVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "简历画像版本号，用于防止旧版本任务结果覆盖新版本任务"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["UPSERT", "DELETE"],
+      "default": "UPSERT",
+      "description": "向量操作类型；缺省时按 UPSERT 兼容历史结果消息"
+    },
     "success": {
       "type": "boolean",
       "description": "向量化是否成功"
     },
     "chunksCount": {
       "type": "integer",
+      "minimum": 0,
       "description": "成功入库的切片数量"
     },
     "errorMessage": {
       "type": "string",
       "description": "向量化失败原因，success=false 时必需"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "success": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "chunksCount"
+        ],
+        "properties": {
+          "chunksCount": {
+            "minimum": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "success": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "errorMessage"
+        ]
+      }
+    }
+  ]
 }

@@ -68,6 +68,23 @@ def _raise_if_error(state: ResumeParserState) -> None:
         )
 
 
+def _storage_origin(parsed, hostname: str) -> str:
+    """生成用于白名单比对的规范来源键，始终补齐协议和有效端口。"""
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise AppError("简历文件地址端口无效", code="RESUME_URL_INVALID") from exc
+
+    host_for_origin = f"[{hostname}]" if ":" in hostname else hostname
+    return f"{parsed.scheme}://{host_for_origin}:{port}"
+
+
+def _safe_download_url(file_url: str) -> str:
+    """返回不含查询串与片段的安全下载地址，避免预签名参数写入日志。"""
+    parsed = urlparse(file_url)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+
 def _parse_download_url(file_url: str, settings: Settings):
     """校验 URL 语法和存储域名白名单，返回后续连接使用的解析结果。"""
     parsed = urlparse(file_url)
@@ -75,39 +92,23 @@ def _parse_download_url(file_url: str, settings: Settings):
     if parsed.scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
         raise AppError("简历文件地址无效，仅支持不带用户信息的 HTTP(S) 地址", code="RESUME_URL_INVALID")
 
-    allowed_hosts = {
-        host.strip().rstrip(".").lower()
-        for host in settings.resume_allowed_hosts
-        if host.strip()
-    }
-    is_allowed_host = any(
-        hostname == allowed or hostname.endswith(f".{allowed}")
-        for allowed in allowed_hosts
-    )
-    if allowed_hosts and not is_allowed_host:
-        raise AppError("简历文件地址不在允许的存储域名范围内", code="RESUME_URL_NOT_ALLOWED")
+    origin = _storage_origin(parsed, hostname)
+    allowed_origins = set(settings.resume_allowed_origins)
+    is_allowed_origin = origin in allowed_origins
+    if allowed_origins and not is_allowed_origin:
+        raise AppError("简历文件地址不在允许的存储地址范围内", code="RESUME_URL_NOT_ALLOWED")
     # 公网地址必须使用 HTTPS；仅显式信任的内部存储主机可以使用 HTTP。
-    if parsed.scheme == "http" and not is_allowed_host:
+    if parsed.scheme == "http" and not is_allowed_origin:
         raise AppError(
-            "简历文件地址必须使用 HTTPS，内部 HTTP 存储需先加入域名白名单",
+            "简历文件地址必须使用 HTTPS，内部 HTTP 存储需先加入来源白名单",
             code="RESUME_INSECURE_URL",
         )
-    return parsed, hostname
+    return parsed, hostname, is_allowed_origin
 
 
 def _validate_download_url(file_url: str, settings: Settings) -> str:
     """校验简历下载地址，阻断常见 SSRF 入口和不受控的重定向。"""
-    parsed, hostname = _parse_download_url(file_url, settings)
-
-    allowed_hosts = {
-        host.strip().rstrip(".").lower()
-        for host in settings.resume_allowed_hosts
-        if host.strip()
-    }
-    allow_private = any(
-        hostname == allowed or hostname.endswith(f".{allowed}")
-        for allowed in allowed_hosts
-    )
+    parsed, hostname, allow_private = _parse_download_url(file_url, settings)
     _resolve_public_download_ip(hostname, parsed.port, allow_private=allow_private)
     return file_url
 
@@ -164,16 +165,7 @@ def _download_pdf_sync(file_url: str, settings: Settings) -> dict[str, Any]:
     current_url = file_url
     deadline = time.monotonic() + settings.resume_download_timeout_seconds
     for redirect_count in range(settings.resume_max_redirects + 1):
-        parsed, hostname = _parse_download_url(current_url, settings)
-        allowed_hosts = {
-            host.strip().rstrip(".").lower()
-            for host in settings.resume_allowed_hosts
-            if host.strip()
-        }
-        allow_private = any(
-            hostname == allowed or hostname.endswith(f".{allowed}")
-            for allowed in allowed_hosts
-        )
+        parsed, hostname, allow_private = _parse_download_url(current_url, settings)
         pinned_ip = _resolve_public_download_ip(
             hostname,
             parsed.port,
@@ -243,9 +235,14 @@ def _download_pdf_sync(file_url: str, settings: Settings) -> dict[str, Any]:
                 continue
 
             if response.status < 200 or response.status >= 300:
+                error_code = (
+                    "RESUME_DOWNLOAD_FAILED"
+                    if response.status >= 500
+                    else "RESUME_DOWNLOAD_CLIENT_ERROR"
+                )
                 raise AppError(
                     "简历文件下载失败，请检查文件地址是否有效",
-                    code="RESUME_DOWNLOAD_FAILED",
+                    code=error_code,
                     status_code=502,
                 )
             content_length = response.getheader("Content-Length")
@@ -283,7 +280,7 @@ def _download_pdf_sync(file_url: str, settings: Settings) -> dict[str, Any]:
 async def _download_pdf(state: ResumeParserState, settings: Settings) -> dict[str, Any]:
     """下载带签名的 PDF，并在每次重定向前重新校验目标地址。"""
     try:
-        return await asyncio.to_thread(_download_pdf_sync, state["file_url"], settings)
+        downloaded = await asyncio.to_thread(_download_pdf_sync, state["file_url"], settings)
     except AppError:
         raise
     except socket.timeout as exc:
@@ -293,8 +290,13 @@ async def _download_pdf(state: ResumeParserState, settings: Settings) -> dict[st
             status_code=504,
         ) from exc
     except (OSError, http.client.HTTPException, ValueError) as exc:
-        log.warning("简历文件下载失败 trace_id=%s error=%s", state["trace_id"], exc)
+        log.warning("简历文件下载失败 error=%s", exc)
         raise AppError("简历文件下载失败，请检查文件地址是否有效", code="RESUME_DOWNLOAD_FAILED", status_code=502) from exc
+    log.info(
+        "简历文件下载成功 size_bytes=%s",
+        len(downloaded["pdf_bytes"]),
+    )
+    return downloaded
 
 
 def _extract_page_texts(pdf_bytes: bytes, settings: Settings) -> list[str]:
@@ -444,7 +446,15 @@ def _ocr_page(pdf_bytes: bytes, page_index: int, settings: Settings) -> str:
 
 async def _extract_text(state: ResumeParserState, settings: Settings) -> dict[str, Any]:
     _raise_if_error(state)
-    return {"page_texts": await asyncio.to_thread(_extract_page_texts, state["pdf_bytes"], settings)}
+    page_texts = await asyncio.to_thread(
+        _extract_page_texts, state["pdf_bytes"], settings
+    )
+    log.info(
+        "PDF 文本提取完成 pages=%s chars=%s",
+        len(page_texts),
+        sum(len(text) for text in page_texts),
+    )
+    return {"page_texts": page_texts}
 
 
 def _select_ocr_pages(state: ResumeParserState, settings: Settings) -> dict[str, Any]:
@@ -472,6 +482,10 @@ async def _ocr_pages(state: ResumeParserState, settings: Settings) -> dict[str, 
             page_index,
             settings,
         )
+    log.info(
+        "OCR 识别完成 pages=%s",
+        sorted(ocr_texts),
+    )
     return {"ocr_texts": ocr_texts}
 
 
@@ -557,6 +571,11 @@ async def _call_deepseek(
         "max_tokens": settings.deepseek_max_tokens,
         "response_format": {"type": "json_object"},
     }
+    log.info(
+        "调用 DeepSeek 结构化 input_chars=%s repair=%s",
+        len(llm_text),
+        bool(repair_error),
+    )
     try:
         async with httpx.AsyncClient(
             base_url=settings.deepseek_base_url.rstrip("/"),
@@ -570,11 +589,13 @@ async def _call_deepseek(
             response.raise_for_status()
             body = response.json()
             content = body["choices"][0]["message"]["content"]
-            return _parse_json_content(content)
+            parsed = _parse_json_content(content)
+            log.info("DeepSeek 结构化调用成功")
+            return parsed
     except AppError:
         raise
     except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        log.exception("DeepSeek 简历结构化失败 trace_id=%s", trace_id)
+        log.exception("DeepSeek 简历结构化失败")
         raise AppError("简历结构化服务暂时不可用，请稍后重试", code="LLM_REQUEST_FAILED", status_code=502) from exc
 
 
@@ -611,6 +632,7 @@ async def _structure_resume(state: ResumeParserState, settings: Settings) -> dic
             structured = ResumeStructuredData.model_validate(repaired_payload)
         except ValidationError as second_error:
             raise AppError("模型返回的简历字段无法校验，请稍后重试", code="LLM_SCHEMA_INVALID", status_code=502) from second_error
+    log.info("简历结构化完成")
     return {"structured_data": structured.model_dump(), "result": ParseResumeResponse(success=True, **structured.model_dump())}
 
 
@@ -664,6 +686,11 @@ async def parse_resume(
     """执行简历解析图，并将底层异常转换为接口可读的失败响应。"""
     if mime_type.lower() != "application/pdf":
         raise AppError("当前仅支持 application/pdf 格式的简历文件", code="UNSUPPORTED_FILE_TYPE")
+    log.info(
+        "开始解析简历 url=%s mime_type=%s",
+        _safe_download_url(file_url),
+        mime_type,
+    )
     initial_state: ResumeParserState = {
         "file_url": file_url,
         "mime_type": mime_type,
@@ -672,13 +699,15 @@ async def parse_resume(
     try:
         graph = build_resume_parser_graph(settings) if settings else get_resume_parser_graph()
         final_state = await graph.ainvoke(initial_state)
-        return final_state["result"]
+        result = final_state["result"]
+        log.info("简历解析完成 success=%s", result.success)
+        return result
     except AppError as exc:
         if raise_on_error:
             raise
         return ParseResumeResponse(success=False, rawText="", errorMessage=exc.message)
     except Exception as exc:  # noqa: BLE001 - 对外隐藏内部堆栈，保留统一可读错误
-        log.exception("简历解析流程异常 trace_id=%s", trace_id)
+        log.exception("简历解析流程异常")
         if raise_on_error:
             raise AppError(
                 "简历解析失败，请稍后重试",

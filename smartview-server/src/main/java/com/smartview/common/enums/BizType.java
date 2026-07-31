@@ -29,6 +29,12 @@ public enum BizType {
     RESUME_FILE("RESUME_FILE", "简历文件"),
 
     /**
+     * 简历画像
+     * biz_id 指向 resume_profile 表的主键，用于简历向量入库任务
+     */
+    RESUME_PROFILE("RESUME_PROFILE", "简历画像"),
+
+    /**
      * 面试会话
      * biz_id 指向 interview_session 表的主键（后续扩展）
      * 用于面试分析、报告生成任务

@@ -7,23 +7,42 @@
  * - 列出风险点和改进建议
  * - 支持报告导出
  */
-import { DownloadOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Space, Typography } from "antd";
+import {
+  BarChartOutlined,
+  DownloadOutlined,
+  FileSearchOutlined,
+  LockOutlined,
+} from "@ant-design/icons";
+import { Button, Card, Empty, Typography } from "antd";
 
 export default function ReportPage() {
   return (
-    <Space className="page-stack" orientation="vertical" size={24}>
-      <section>
-        <Typography.Title level={2}>报告</Typography.Title>
-        <Typography.Paragraph type="secondary">面试结束后查看准备度、岗位匹配、风险点和学习建议。</Typography.Paragraph>
+    <div className="page-stack">
+      <section className="page-header">
+        <Typography.Title className="page-title" level={1}>
+          复盘报告
+        </Typography.Title>
+        <Typography.Paragraph className="page-subtitle">
+          查看历史模拟面试记录，点击查看详细分析报告。
+        </Typography.Paragraph>
       </section>
-      <Card>
-        <Empty description="暂无报告">
-          <Button icon={<DownloadOutlined />} type="primary">
+
+      <Card className="report-empty-panel" bordered={false}>
+        {/* 不伪造报告列表数据，真实报告接口接入后可直接替换此空状态内容。 */}
+        <Empty
+          description="完成一次模拟面试后，这里会展示准备度、风险点和学习建议。"
+          image={<BarChartOutlined style={{ color: "#c7d1dc", fontSize: 64 }} />}
+        >
+          <Button disabled icon={<DownloadOutlined />} type="primary">
             导出报告
           </Button>
         </Empty>
+        <div className="report-preview-hint">
+          <FileSearchOutlined aria-hidden="true" />
+          <span>报告会基于真实面试记录生成，当前暂无可展示内容。</span>
+          <LockOutlined aria-hidden="true" />
+        </div>
       </Card>
-    </Space>
+    </div>
   );
 }

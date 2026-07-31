@@ -149,6 +149,24 @@ public class AiTask {
     private Long bizId;
 
     /**
+     * 简历画像版本号。
+     *
+     * 只有 RESUME_VECTORIZE 任务使用该字段；结果消费者必须同时匹配
+     * profileId 和 profileVersion，防止旧版本异步结果覆盖当前任务状态。
+     */
+    @TableField("profile_version")
+    private Integer profileVersion;
+
+    /**
+     * 向量任务操作类型。
+     *
+     * <p>仅 RESUME_VECTORIZE 使用：UPSERT 表示写入当前画像切片，
+     * DELETE 表示清理该画像的全部历史切片。历史任务为空时按 UPSERT 兼容。</p>
+     */
+    @TableField("operation")
+    private String operation;
+
+    /**
      * 投递给 AI 服务的请求 JSON
      * 记录发送给 FastAPI 的完整请求数据，用于：
      * 1. 审计追踪：记录每次任务的输入参数

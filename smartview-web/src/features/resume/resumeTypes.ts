@@ -9,6 +9,8 @@ export type ResumeProfile = components["schemas"]["ResumeProfile"];
 export type ResumeFile = components["schemas"]["ResumeFile"];
 export type UpdateResumeProfileRequest =
   components["schemas"]["UpdateResumeProfileRequest"];
+export type ResumeVectorizationStatus =
+  components["schemas"]["ResumeVectorizationStatus"];
 
 /** 解析状态 */
 export type ParseStatus = ResumeFile["parseStatus"];

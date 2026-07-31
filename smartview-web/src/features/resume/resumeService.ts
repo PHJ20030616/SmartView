@@ -1,12 +1,15 @@
 import type {
   ResumeFile,
   ResumeProfile,
+  ResumeVectorizationStatus,
   UpdateResumeProfileRequest,
 } from "./resumeTypes";
 import {
   confirmResumeProfileApi,
   getResumeFileApi,
   getResumeProfileApi,
+  getResumeVectorizationStatusApi,
+  retryResumeVectorizationApi,
   updateResumeProfileApi,
   uploadResumeApi,
 } from "./resumeApi";
@@ -22,6 +25,7 @@ export type ParsePhase = "upload" | "parse" | "success" | "failure" | "timeout";
 /** 轮询配置 */
 const POLL_INTERVAL_MS = 2000; // 轮询间隔：2 秒
 const POLL_MAX_DURATION_MS = 120_000; // 最大轮询时长：2 分钟
+const VECTOR_POLL_MAX_DURATION_MS = 60_000; // 向量入库最多等待 60 秒
 
 /** 判断异步上传/轮询是否因页面离开而取消，供页面静默忽略该异常。 */
 export function isResumeParseAbortError(error: unknown): boolean {
@@ -122,6 +126,121 @@ export async function submitResumeConfirmation(
   return confirmResumeProfileApi(profileId, signal);
 }
 
+/** 向量入库轮询终态错误，保留最近一次后端状态供页面显示重试入口。 */
+export class ResumeVectorizationError extends Error {
+  readonly status?: ResumeVectorizationStatus;
+  readonly timedOut: boolean;
+
+  constructor(
+    message: string,
+    status?: ResumeVectorizationStatus,
+    timedOut = false,
+  ) {
+    super(message);
+    this.name = "ResumeVectorizationError";
+    this.status = status;
+    this.timedOut = timedOut;
+  }
+}
+
+/**
+ * 查询当前画像的向量入库状态。
+ */
+export async function fetchResumeVectorizationStatus(
+  profileId: string,
+  signal?: AbortSignal,
+): Promise<ResumeVectorizationStatus> {
+  return getResumeVectorizationStatusApi(profileId, signal);
+}
+
+/**
+ * 轮询向量入库状态，成功才返回；失败或 60 秒超时交给页面展示重试入口。
+ */
+export async function waitForResumeVectorization(
+  profileId: string,
+  onStatus?: (status: ResumeVectorizationStatus) => void,
+  signal?: AbortSignal,
+): Promise<ResumeVectorizationStatus> {
+  const deadline = Date.now() + VECTOR_POLL_MAX_DURATION_MS;
+  const deadlineController = new AbortController();
+  const handleExternalAbort = () => deadlineController.abort();
+  const timeoutId = setTimeout(
+    () => deadlineController.abort(),
+    VECTOR_POLL_MAX_DURATION_MS,
+  );
+  signal?.addEventListener("abort", handleExternalAbort, { once: true });
+
+  let status: ResumeVectorizationStatus | undefined;
+  try {
+    status = await getResumeVectorizationStatusApi(
+        profileId,
+        deadlineController.signal,
+    );
+    throwIfDeadlineExceeded(deadline, deadlineController.signal);
+    onStatus?.(status);
+
+    while (true) {
+      if (status.status === "SUCCESS") {
+        return status;
+      }
+      if (status.status === "FAILED") {
+        throw new ResumeVectorizationError(
+          status.errorMessage || "简历向量入库失败，请重试",
+          status,
+        );
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+      await sleep(
+        Math.min(POLL_INTERVAL_MS, remaining),
+        deadlineController.signal,
+      );
+      throwIfDeadlineExceeded(deadline, deadlineController.signal);
+      status = await getResumeVectorizationStatusApi(
+        profileId,
+        deadlineController.signal,
+      );
+      throwIfDeadlineExceeded(deadline, deadlineController.signal);
+      onStatus?.(status);
+    }
+
+    throw new ResumeVectorizationError(
+      "简历向量入库等待超时，请点击重试",
+      status,
+      true,
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+    if (deadlineController.signal.aborted) {
+      throw new ResumeVectorizationError(
+        "简历向量入库等待超时，请点击重试",
+        status,
+        true,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", handleExternalAbort);
+  }
+}
+
+/**
+ * 创建新的向量入库任务。隔离字段由 Spring Boot 根据当前登录用户生成，
+ * 页面只传画像路径参数。
+ */
+export async function retryResumeVectorization(
+  profileId: string,
+  signal?: AbortSignal,
+): Promise<ResumeVectorizationStatus> {
+  return retryResumeVectorizationApi(profileId, signal);
+}
+
 /**
  * 延迟工具函数
  */
@@ -153,6 +272,19 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw createAbortError();
+  }
+}
+
+function throwIfDeadlineExceeded(
+  deadline: number,
+  deadlineSignal: AbortSignal,
+): void {
+  if (deadlineSignal.aborted || Date.now() >= deadline) {
+    throw new ResumeVectorizationError(
+      "简历向量入库等待超时，请点击重试",
+      undefined,
+      true,
+    );
   }
 }
 

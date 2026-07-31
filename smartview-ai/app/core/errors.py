@@ -11,6 +11,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.core.trace import TRACE_ID_HEADER, reset_trace_id, set_trace_id
+
 log = logging.getLogger(__name__)
 
 
@@ -96,9 +98,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         """处理未预期异常"""
-        # 兜底异常不向调用方暴露堆栈，详细信息仅保留在服务端日志。
-        log.exception("Unhandled AI service exception", exc_info=exc)
-        return JSONResponse(
+        # 兜底 handler 可能运行在 trace 中间件恢复上下文之后（ServerErrorMiddleware
+        # 兜底路径），这里基于请求状态重新注入，保证最关键的异常日志也能关联链路。
+        token = set_trace_id(request.state.trace_id)
+        try:
+            # 兜底异常不向调用方暴露堆栈，详细信息仅保留在服务端日志。
+            log.exception("Unhandled AI service exception", exc_info=exc)
+        finally:
+            reset_trace_id(token)
+        response = JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_error_body(request, "INTERNAL_ERROR", "AI 服务暂时不可用，请稍后再试"),
         )
+        # ServerErrorMiddleware 兜底响应不经过 trace 中间件，需手动回写追踪 ID 响应头
+        response.headers[TRACE_ID_HEADER] = request.state.trace_id
+        return response

@@ -100,7 +100,8 @@ export interface paths {
         get: operations["getResumeFile"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 删除简历文件 */
+        delete: operations["deleteResume"];
         options?: never;
         head?: never;
         patch?: never;
@@ -135,6 +136,40 @@ export interface paths {
         put?: never;
         /** 确认简历画像 */
         post: operations["confirmResumeProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resume-profiles/{profileId}/vectorization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 查询简历向量入库状态 */
+        get: operations["getResumeVectorizationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resume-profiles/{profileId}/vectorization/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 重试简历向量入库 */
+        post: operations["retryResumeVectorization"];
         delete?: never;
         options?: never;
         head?: never;
@@ -241,8 +276,6 @@ export interface components {
              * @example 操作成功
              */
             message: string;
-            /** @description 响应数据 */
-            data: Record<string, never> | null;
             /**
              * Format: uuid
              * @description 链路追踪 ID
@@ -401,6 +434,33 @@ export interface components {
         };
         ResumeProfileResponse: components["schemas"]["ApiResponse"] & {
             data?: components["schemas"]["ResumeProfile"];
+        };
+        ResumeVectorizationStatusResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["ResumeVectorizationStatus"];
+        };
+        ResumeVectorizationStatus: {
+            /** @description 简历画像 ID */
+            resumeProfileId: string;
+            /** @description 当前简历画像版本号 */
+            profileVersion: number;
+            /** @description 向量入库任务 ID */
+            taskId?: string | null;
+            /**
+             * @description 向量入库任务状态
+             * @enum {string}
+             */
+            status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED" | "RETRYING";
+            /** @description 已使用的重试次数 */
+            retryCount?: number;
+            /** @description 成功写入的切片数量 */
+            chunksCount?: number | null;
+            /** @description 最近一次失败原因 */
+            errorMessage?: string | null;
+            /**
+             * Format: date-time
+             * @description 状态更新时间
+             */
+            updatedAt?: string | null;
         };
         ResumeProfile: {
             /** @description 简历画像 ID */
@@ -880,6 +940,30 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    deleteResume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resumeFileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     getResumeProfile: {
         parameters: {
             query?: never;
@@ -952,6 +1036,54 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getResumeVectorizationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeVectorizationStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    retryResumeVectorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重试任务已创建 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeVectorizationStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
         };
     };

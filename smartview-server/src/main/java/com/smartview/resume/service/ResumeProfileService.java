@@ -23,6 +23,7 @@ import com.smartview.task.entity.AiTask;
 import com.smartview.task.mapper.AiTaskMapper;
 import com.smartview.task.mq.ResumeParseResultMessage;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,18 +59,40 @@ public class ResumeProfileService {
     private final AiTaskMapper aiTaskMapper;
     private final ObjectMapper objectMapper;
     private final SchemaValidator schemaValidator;
+    private final ResumeVectorizationService resumeVectorizationService;
 
+    @Autowired
+    public ResumeProfileService(
+            ResumeProfileMapper resumeProfileMapper,
+            ResumeFileMapper resumeFileMapper,
+            AiTaskMapper aiTaskMapper,
+            ObjectMapper objectMapper,
+            SchemaValidator schemaValidator,
+            ResumeVectorizationService resumeVectorizationService) {
+        this.resumeProfileMapper = resumeProfileMapper;
+        this.resumeFileMapper = resumeFileMapper;
+        this.aiTaskMapper = aiTaskMapper;
+        this.objectMapper = objectMapper;
+        this.schemaValidator = schemaValidator;
+        this.resumeVectorizationService = resumeVectorizationService;
+    }
+
+    /**
+     * 保留旧测试使用的构造函数；正式 Bean 通过上面的构造函数注入向量服务。
+     */
     public ResumeProfileService(
             ResumeProfileMapper resumeProfileMapper,
             ResumeFileMapper resumeFileMapper,
             AiTaskMapper aiTaskMapper,
             ObjectMapper objectMapper,
             SchemaValidator schemaValidator) {
-        this.resumeProfileMapper = resumeProfileMapper;
-        this.resumeFileMapper = resumeFileMapper;
-        this.aiTaskMapper = aiTaskMapper;
-        this.objectMapper = objectMapper;
-        this.schemaValidator = schemaValidator;
+        this(
+                resumeProfileMapper,
+                resumeFileMapper,
+                aiTaskMapper,
+                objectMapper,
+                schemaValidator,
+                null);
     }
 
     /**
@@ -193,6 +216,13 @@ public class ResumeProfileService {
         String errorMessage = message.getErrorMessage() != null
                 ? message.getErrorMessage()
                 : "AI 解析失败，未返回具体错误信息";
+
+        /*
+         * FastAPI worker 会在同一个任务消息内递增 retryCount 后重投。结果回传时必须
+         * 同步这段已消耗的重试预算；否则数据库仍以旧次数判断“可重试”，会把最终失败
+         * 错误地重置为 PENDING 并造成前端持续轮询。
+         */
+        synchronizeRetryCountFromResult(aiTask, message.getRetryCount());
 
         // 步骤 3：用校验通过的 bizId 查询并更新简历文件
         ResumeFile resumeFile = resumeFileMapper.selectById(aiTask.getBizId());
@@ -350,6 +380,19 @@ public class ResumeProfileService {
         aiTask.setErrorMessage(errorMessage);
         aiTask.setFinishedAt(retryable ? null : LocalDateTime.now());
         aiTaskMapper.updateById(aiTask);
+    }
+
+    /**
+     * 合并 FastAPI 回传的重试次数，不允许迟到消息将数据库中的次数回退。
+     */
+    private void synchronizeRetryCountFromResult(AiTask aiTask, Integer messageRetryCount) {
+        if (messageRetryCount == null) {
+            return;
+        }
+        int persistedRetryCount = aiTask.getRetryCount() == null ? 0 : aiTask.getRetryCount();
+        if (messageRetryCount > persistedRetryCount) {
+            aiTask.setRetryCount(messageRetryCount);
+        }
     }
 
     /**
@@ -662,14 +705,29 @@ public class ResumeProfileService {
         // 已确认的画像不报错，幂等返回
         if (ConfirmStatus.CONFIRMED.getCode().equals(profile.getConfirmStatus())) {
             log.info("简历画像已确认，无需重复操作，profileId={}", profileId);
+            // 幂等确认也要补偿历史上可能因 MQ 暂时不可用而没有创建成功的向量任务。
+            ensureVectorizationTask(profile);
             return convertToDto(profile);
         }
 
         profile.setConfirmStatus(ConfirmStatus.CONFIRMED.getCode());
         profile.setConfirmedAt(LocalDateTime.now());
         resumeProfileMapper.updateById(profile);
+        // 任务记录与确认状态共用当前事务；真正的 MQ 发送由向量服务在提交后触发。
+        ensureVectorizationTask(profile);
         log.info("简历画像确认成功，profileId={}, userId={}", profileId, userId);
         return convertToDto(profile);
+    }
+
+    /**
+     * 兼容旧测试构造函数，同时保证生产环境确认流程一定创建向量任务。
+     */
+    private void ensureVectorizationTask(ResumeProfile profile) {
+        if (resumeVectorizationService == null) {
+            log.debug("当前服务未注入向量服务，跳过向量任务创建，profileId={}", profile.getId());
+            return;
+        }
+        resumeVectorizationService.ensureTask(profile);
     }
 
     /**

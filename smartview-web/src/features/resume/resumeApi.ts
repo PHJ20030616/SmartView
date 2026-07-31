@@ -2,6 +2,7 @@ import { request } from "../../api/request";
 import type {
   ResumeFile,
   ResumeProfile,
+  ResumeVectorizationStatus,
   UpdateResumeProfileRequest,
 } from "./resumeTypes";
 
@@ -112,4 +113,40 @@ export async function confirmResumeProfileApi(
   >(`/resume-profiles/${profileId}/confirm`, undefined, { signal });
 
   return extractData(response.data, `/resume-profiles/${profileId}/confirm`);
+}
+
+/**
+ * 查询简历向量入库状态
+ * GET /api/resume-profiles/{profileId}/vectorization
+ */
+export async function getResumeVectorizationStatusApi(
+  profileId: string,
+  signal?: AbortSignal,
+): Promise<ResumeVectorizationStatus> {
+  const response = await request.get<
+    ApiResponseWrapper<ResumeVectorizationStatus>
+  >(`/resume-profiles/${profileId}/vectorization`, { signal });
+
+  return extractData(
+    response.data,
+    `/resume-profiles/${profileId}/vectorization`,
+  );
+}
+
+/**
+ * 重试简历向量入库
+ * POST /api/resume-profiles/{profileId}/vectorization/retry
+ */
+export async function retryResumeVectorizationApi(
+  profileId: string,
+  signal?: AbortSignal,
+): Promise<ResumeVectorizationStatus> {
+  const response = await request.post<
+    ApiResponseWrapper<ResumeVectorizationStatus>
+  >(`/resume-profiles/${profileId}/vectorization/retry`, undefined, { signal });
+
+  return extractData(
+    response.data,
+    `/resume-profiles/${profileId}/vectorization/retry`,
+  );
 }

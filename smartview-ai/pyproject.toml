@@ -6,6 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
   "httpx>=0.27.0",
+  "aio-pika>=9.5.0",
+  "SQLAlchemy>=2.0.0",
+  "PyMySQL>=1.1.0",
+  "chromadb>=1.0.0",
   "langgraph>=0.6.0",
   "PyMuPDF>=1.26.0",
   "pydantic-settings>=2.4.0",
@@ -22,6 +26,14 @@ ocr = [
   "paddleocr>=3.0.0",
   "paddlepaddle>=3.0.0"
 ]
+
+# 项目根目录下的 logs 仅用于运行时输出，不属于 Python 包。
+# 显式限制包发现范围，避免 setuptools 将 logs 误识别为顶层命名空间包，
+# 从而导致 `pip install -e .` 在全新环境中失败。
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["logs*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -50,6 +50,38 @@ def _normalize_openapi_3_0(value: Any) -> Any:
     return normalized
 
 
+# X-Trace-Id 响应头声明：与 contracts/ai-api/openapi.yaml 保持一致（契约优先）
+_TRACE_ID_RESPONSE_HEADER = "X-Trace-Id"
+_TRACE_ID_HEADER_REF = {"X-Trace-Id": {"$ref": "#/components/headers/XTraceId"}}
+_TRACE_ID_HEADER_COMPONENT = {
+    "description": "链路追踪 ID，与请求头 X-Trace-Id 一致，用于跨服务关联日志",
+    "schema": {"type": "string", "format": "uuid"},
+}
+
+
+def _inject_trace_id_response_headers(schema: dict[str, Any]) -> None:
+    """把 X-Trace-Id 响应头声明注入生成的 OpenAPI。
+
+    trace 中间件会给所有响应追加 X-Trace-Id 响应头，属于跨服务可见行为，
+    因此 OpenAPI 文档与契约均需声明该响应头。
+    """
+    for path_item in schema.get("paths", {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        for operation in path_item.values():
+            if not isinstance(operation, dict) or not isinstance(
+                operation.get("responses"), dict
+            ):
+                continue
+            for response in operation["responses"].values():
+                if isinstance(response, dict):
+                    response.setdefault("headers", dict(_TRACE_ID_HEADER_REF))
+    components = schema.setdefault("components", {})
+    components.setdefault("headers", {})["XTraceId"] = dict(
+        _TRACE_ID_HEADER_COMPONENT
+    )
+
+
 def create_app() -> FastAPI:
     """
     创建并配置 FastAPI 应用实例
@@ -58,7 +90,14 @@ def create_app() -> FastAPI:
         FastAPI: 配置完成的应用实例
     """
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        log_dir=settings.log_dir,
+        log_file_enabled=settings.log_file_enabled,
+        log_file_max_bytes=settings.log_file_max_bytes,
+        log_file_backup_count=settings.log_file_backup_count,
+        log_file_name="smartview-api.log",
+    )
 
     app = FastAPI(
         title=settings.app_name,
@@ -73,7 +112,9 @@ def create_app() -> FastAPI:
 
     def openapi_3_0() -> dict[str, Any]:
         if app.openapi_schema is None:
-            app.openapi_schema = _normalize_openapi_3_0(original_openapi())
+            schema = _normalize_openapi_3_0(original_openapi())
+            _inject_trace_id_response_headers(schema)
+            app.openapi_schema = schema
         return app.openapi_schema
 
     app.openapi = openapi_3_0

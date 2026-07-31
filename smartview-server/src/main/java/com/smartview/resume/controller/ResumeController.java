@@ -20,6 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
  * 接口列表：
  * - POST /api/resumes：上传简历文件
  * - GET /api/resumes/{resumeFileId}：获取简历文件信息
+ * - DELETE /api/resumes/{resumeFileId}：删除简历文件及关联画像
  *
  * 技术要点：
  * - 使用 MultipartFile 接收文件上传
@@ -34,6 +35,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/resumes")
 public class ResumeController {
+
 
     private final ResumeFileService resumeFileService;
     private final ResumeProfileService resumeProfileService;
@@ -122,6 +124,31 @@ public class ResumeController {
         ResumeFileDto resumeFileDto = convertToDto(resumeFileEntity);
 
         return ApiResponse.success(resumeFileDto);
+    }
+
+    /**
+     * 删除简历文件。
+     *
+     * <p>用户 ID 只从服务端安全上下文获取，不能由前端请求体或查询参数指定。
+     * 服务层会在 MySQL 事务中完成文件和画像软删除，并在事务提交后异步清理
+     * 向量与 MinIO 派生数据。</p>
+     *
+     * @param resumeFileId 简历文件 ID
+     * @return 空响应
+     */
+    @DeleteMapping("/{resumeFileId}")
+    public ApiResponse<Void> deleteResume(@PathVariable String resumeFileId) {
+        Long userId = SecurityContextHolder.getCurrentUserId();
+        Long parsedResumeFileId;
+        try {
+            parsedResumeFileId = Long.parseLong(resumeFileId);
+        } catch (NumberFormatException exception) {
+            throw new com.smartview.common.exception.BusinessException("简历文件 ID 格式非法");
+        }
+
+        log.info("收到简历删除请求，userId={}, resumeFileId={}", userId, parsedResumeFileId);
+        resumeFileService.deleteResume(parsedResumeFileId, userId);
+        return ApiResponse.success(null);
     }
 
     /**

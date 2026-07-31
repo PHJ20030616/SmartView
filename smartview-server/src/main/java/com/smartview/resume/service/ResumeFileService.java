@@ -11,12 +11,15 @@ import com.smartview.common.exception.BusinessException;
 import com.smartview.config.properties.ResumeProperties;
 import com.smartview.infra.minio.MinioService;
 import com.smartview.resume.entity.ResumeFile;
+import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeFileMapper;
+import com.smartview.resume.mapper.ResumeProfileMapper;
 import com.smartview.task.entity.AiTask;
 import com.smartview.task.mapper.AiTaskMapper;
 import com.smartview.task.mq.ResumeParseMessage;
 import com.smartview.task.mq.ResumeTaskProducer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -61,14 +64,42 @@ import java.util.UUID;
 public class ResumeFileService {
 
     private final ResumeFileMapper resumeFileMapper;
+    private final ResumeProfileMapper resumeProfileMapper;
     private final AiTaskMapper aiTaskMapper;
     private final MinioService minioService;
     private final ResumeTaskProducer resumeTaskProducer;
     private final ResumeProperties resumeProperties;
+    private final ResumeVectorizationService resumeVectorizationService;
     private final TransactionTemplate transactionTemplate;
 
     /**
-     * 构造函数注入依赖
+     * 主构造函数（Spring 依赖注入入口）。
+     * 类中存在多个构造方法时，Spring 无法自动选择注入目标，必须通过 @Autowired 显式指定主构造方法，
+     * 否则应用启动时会报 “No default constructor found” 错误。
+     */
+    @Autowired
+    public ResumeFileService(
+            ResumeFileMapper resumeFileMapper,
+            ResumeProfileMapper resumeProfileMapper,
+            AiTaskMapper aiTaskMapper,
+            MinioService minioService,
+            ResumeTaskProducer resumeTaskProducer,
+            ResumeProperties resumeProperties,
+            ResumeVectorizationService resumeVectorizationService,
+            TransactionTemplate transactionTemplate
+    ) {
+        this.resumeFileMapper = resumeFileMapper;
+        this.resumeProfileMapper = resumeProfileMapper;
+        this.aiTaskMapper = aiTaskMapper;
+        this.minioService = minioService;
+        this.resumeTaskProducer = resumeTaskProducer;
+        this.resumeProperties = resumeProperties;
+        this.resumeVectorizationService = resumeVectorizationService;
+        this.transactionTemplate = transactionTemplate;
+    }
+
+    /**
+     * 保留旧测试和非 Spring 调用方的构造函数；生产环境使用包含向量服务的构造函数。
      */
     public ResumeFileService(
             ResumeFileMapper resumeFileMapper,
@@ -78,12 +109,15 @@ public class ResumeFileService {
             ResumeProperties resumeProperties,
             TransactionTemplate transactionTemplate
     ) {
-        this.resumeFileMapper = resumeFileMapper;
-        this.aiTaskMapper = aiTaskMapper;
-        this.minioService = minioService;
-        this.resumeTaskProducer = resumeTaskProducer;
-        this.resumeProperties = resumeProperties;
-        this.transactionTemplate = transactionTemplate;
+        this(
+                resumeFileMapper,
+                null,
+                aiTaskMapper,
+                minioService,
+                resumeTaskProducer,
+                resumeProperties,
+                null,
+                transactionTemplate);
     }
 
     /**
@@ -194,6 +228,85 @@ public class ResumeFileService {
                         .eq(ResumeFile::getUserId, userId)
                         .orderByDesc(ResumeFile::getUploadedAt)
         );
+    }
+
+    /**
+     * 删除用户的简历文件及其全部画像版本。
+     *
+     * <p>MySQL 中的软删除和 DELETE 向量任务在同一事务内提交，确保删除操作发生后，
+     * 已经确认的画像不会继续作为有效数据被读取。向量库与 MinIO 都属于外部依赖，
+     * 它们的临时异常只记录日志并由后续任务补偿，不能回滚 MySQL 的权威删除状态。</p>
+     *
+     * @param resumeFileId 简历文件 ID
+     * @param userId 当前登录用户 ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteResume(Long resumeFileId, Long userId) {
+        ResumeFile resumeFile = resumeFileMapper.selectOne(
+                new LambdaQueryWrapper<ResumeFile>()
+                        .eq(ResumeFile::getId, resumeFileId)
+                        .eq(ResumeFile::getUserId, userId)
+                        .last("FOR UPDATE"));
+        if (resumeFile == null) {
+            // 不区分“文件不存在”和“文件属于他人”，避免泄露跨用户资源是否存在。
+            throw new BusinessException("简历文件不存在");
+        }
+
+        List<ResumeProfile> profiles = resumeProfileMapper == null
+                ? List.of()
+                : resumeProfileMapper.selectList(
+                        new LambdaQueryWrapper<ResumeProfile>()
+                                .eq(ResumeProfile::getResumeFileId, resumeFileId)
+                                .last("FOR UPDATE"));
+
+        // 先写入删除任务，再软删除画像；DELETE worker 不依赖画像仍处于有效状态，
+        // 但任务记录必须和本次删除一起提交，才能保证删除后有可追踪的清理动作。
+        if (resumeVectorizationService != null) {
+            for (ResumeProfile profile : profiles) {
+                resumeVectorizationService.ensureDeleteTask(profile);
+            }
+        }
+
+        for (ResumeProfile profile : profiles) {
+            resumeProfileMapper.deleteById(profile.getId());
+        }
+        resumeFileMapper.deleteById(resumeFile.getId());
+        scheduleMinioDeleteAfterCommit(resumeFile.getObjectKey(), resumeFile.getId());
+
+        log.info("简历文件已标记删除，userId={}, resumeFileId={}, profileCount={}",
+                userId, resumeFileId, profiles.size());
+    }
+
+    /**
+     * 事务提交后清理对象存储文件。
+     *
+     * <p>MinIO 删除失败不能影响 MySQL 已提交的软删除结果；向量和对象存储均属于
+     * 可重试的派生数据，后续清理任务可以根据 objectKey 继续补偿。</p>
+     */
+    private void scheduleMinioDeleteAfterCommit(String objectKey, Long resumeFileId) {
+        if (objectKey == null || objectKey.isBlank()) {
+            return;
+        }
+        Runnable delete = () -> {
+            try {
+                minioService.deleteFile(objectKey);
+            } catch (Exception exception) {
+                log.error("简历文件已删除但 MinIO 清理失败，等待后续补偿，resumeFileId={}, objectKey={}",
+                        resumeFileId, objectKey, exception);
+            }
+        };
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    delete.run();
+                }
+            });
+        } else {
+            // 兼容非事务测试或内部调用；正式删除入口始终由 @Transactional 执行。
+            delete.run();
+        }
     }
 
     /**

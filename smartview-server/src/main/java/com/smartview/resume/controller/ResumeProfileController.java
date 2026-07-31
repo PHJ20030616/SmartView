@@ -2,8 +2,10 @@ package com.smartview.resume.controller;
 
 import com.smartview.common.api.ApiResponse;
 import com.smartview.resume.dto.ResumeProfileDto;
+import com.smartview.resume.dto.ResumeVectorizationStatusDto;
 import com.smartview.resume.dto.UpdateResumeProfileRequest;
 import com.smartview.resume.service.ResumeProfileService;
+import com.smartview.resume.service.ResumeVectorizationService;
 import com.smartview.security.SecurityContextHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -35,14 +37,18 @@ import org.springframework.web.bind.annotation.*;
 public class ResumeProfileController {
 
     private final ResumeProfileService resumeProfileService;
+    private final ResumeVectorizationService resumeVectorizationService;
 
     /**
      * 构造函数注入依赖
      *
      * @param resumeProfileService 简历画像服务
      */
-    public ResumeProfileController(ResumeProfileService resumeProfileService) {
+    public ResumeProfileController(
+            ResumeProfileService resumeProfileService,
+            ResumeVectorizationService resumeVectorizationService) {
         this.resumeProfileService = resumeProfileService;
+        this.resumeVectorizationService = resumeVectorizationService;
     }
 
     /**
@@ -119,5 +125,31 @@ public class ResumeProfileController {
 
         ResumeProfileDto profile = resumeProfileService.confirmProfile(profileId, userId);
         return ApiResponse.success(profile);
+    }
+
+    /**
+     * 查询当前用户画像的向量入库状态。
+     *
+     * 隔离条件由 Spring 根据认证用户和路径中的画像 ID 生成，前端不能提交 user_id 或版本号。
+     */
+    @GetMapping("/{profileId}/vectorization")
+    public ApiResponse<ResumeVectorizationStatusDto> getVectorizationStatus(
+            @PathVariable Long profileId) {
+        Long userId = SecurityContextHolder.getCurrentUserId();
+        log.info("收到简历向量状态查询请求，userId={}, profileId={}", userId, profileId);
+        return ApiResponse.success(resumeVectorizationService.getStatus(profileId, userId));
+    }
+
+    /**
+     * 为当前画像版本创建一次新的向量入库任务。
+     *
+     * 只有失败或尚未创建任务时允许重试，进行中的任务保持幂等返回。
+     */
+    @PostMapping("/{profileId}/vectorization/retry")
+    public ApiResponse<ResumeVectorizationStatusDto> retryVectorization(
+            @PathVariable Long profileId) {
+        Long userId = SecurityContextHolder.getCurrentUserId();
+        log.info("收到简历向量入库重试请求，userId={}, profileId={}", userId, profileId);
+        return ApiResponse.success(resumeVectorizationService.retry(profileId, userId));
     }
 }

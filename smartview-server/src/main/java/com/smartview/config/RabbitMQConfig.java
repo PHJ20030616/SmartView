@@ -1,5 +1,7 @@
 package com.smartview.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
@@ -53,6 +55,12 @@ public class RabbitMQConfig {
 
     public static final String QUEUE_RESUME_PARSE = "smartview.resume.parse";
     public static final String ROUTING_KEY_RESUME_PARSE = "resume.parse.task";
+    /*
+     * 任务队列增加版本后缀，避免给旧的无 DLX 队列补声明参数时触发 RabbitMQ
+     * PRECONDITION_FAILED；旧队列中的消息仍可由运维按原流程处理。
+     */
+    public static final String QUEUE_RESUME_VECTORIZE = "smartview.resume.vectorize.v1";
+    public static final String ROUTING_KEY_RESUME_VECTORIZE = "resume.vectorize.task";
 
     // ==================== 结果队列及死信队列常量 ====================
 
@@ -68,6 +76,8 @@ public class RabbitMQConfig {
      * 简历解析结果路由键
      */
     public static final String ROUTING_KEY_RESUME_PARSE_RESULT = "resume.parse.result";
+    public static final String QUEUE_RESUME_VECTORIZE_RESULT = "smartview.resume.vectorize.result.v1";
+    public static final String ROUTING_KEY_RESUME_VECTORIZE_RESULT = "resume.vectorize.result";
 
     /**
      * 死信交换机，所有队列的重试耗尽消息统一路由到此
@@ -83,6 +93,14 @@ public class RabbitMQConfig {
      * 结果队列的死信路由键
      */
     private static final String ROUTING_KEY_RESUME_PARSE_RESULT_DLQ = "resume.parse.result.dlq";
+    private static final String QUEUE_RESUME_VECTORIZE_DLQ =
+            "smartview.resume.vectorize.dlq";
+    private static final String ROUTING_KEY_RESUME_VECTORIZE_DLQ =
+            "resume.vectorize.task.dlq";
+    private static final String QUEUE_RESUME_VECTORIZE_RESULT_DLQ =
+            "smartview.resume.vectorize.result.dlq";
+    private static final String ROUTING_KEY_RESUME_VECTORIZE_RESULT_DLQ =
+            "resume.vectorize.result.dlq";
 
     /**
      * 最大处理次数（首次消费 + 3 次重试 = 共 4 次机会）
@@ -126,6 +144,26 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_RESUME_PARSE);
     }
 
+    @Bean
+    public Queue resumeVectorizeQueue() {
+        /*
+         * 任务消息不能因为 worker 发布结果失败而静默丢失。
+         * 进入 DLQ 后由向量补偿调度器依据 ai_task 的租约再次投递。
+         */
+        return QueueBuilder.durable(QUEUE_RESUME_VECTORIZE)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_RESUME_VECTORIZE_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding resumeVectorizeBinding() {
+        return BindingBuilder
+                .bind(resumeVectorizeQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_RESUME_VECTORIZE);
+    }
+
     // ==================== 结果队列（FastAPI → Spring Boot） ====================
 
     /**
@@ -148,7 +186,36 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_RESUME_PARSE_RESULT);
     }
 
-    // ==================== 结果死信队列 ====================
+    @Bean
+    public Queue resumeVectorizeResultQueue() {
+        return QueueBuilder.durable(QUEUE_RESUME_VECTORIZE_RESULT)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_RESUME_VECTORIZE_RESULT_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding resumeVectorizeResultBinding() {
+        return BindingBuilder
+                .bind(resumeVectorizeResultQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_RESUME_VECTORIZE_RESULT);
+    }
+
+    // ==================== 任务/结果死信队列 ====================
+
+    @Bean
+    public Queue resumeVectorizeDlq() {
+        return new Queue(QUEUE_RESUME_VECTORIZE_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding resumeVectorizeDlqBinding() {
+        return BindingBuilder
+                .bind(resumeVectorizeDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_RESUME_VECTORIZE_DLQ);
+    }
 
     /**
      * 创建结果队列的死信队列
@@ -167,6 +234,19 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_RESUME_PARSE_RESULT_DLQ);
     }
 
+    @Bean
+    public Queue resumeVectorizeResultDlq() {
+        return new Queue(QUEUE_RESUME_VECTORIZE_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding resumeVectorizeResultDlqBinding() {
+        return BindingBuilder
+                .bind(resumeVectorizeResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_RESUME_VECTORIZE_RESULT_DLQ);
+    }
+
     // ==================== 消费者容器工厂（带重试拦截器） ====================
 
     /**
@@ -179,10 +259,11 @@ public class RabbitMQConfig {
      */
     @Bean
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory) {
+            ConnectionFactory connectionFactory,
+            ObjectMapper objectMapper) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(jsonMessageConverter());
+        factory.setMessageConverter(jsonMessageConverter(objectMapper));
         // 注册重试拦截器：系统异常最多重试 3 次，指数退避 1s→2s→4s
         factory.setAdviceChain(retryOperationsInterceptor());
         return factory;
@@ -230,7 +311,11 @@ public class RabbitMQConfig {
     // ==================== 消息转换器 ====================
 
     @Bean
-    public MessageConverter jsonMessageConverter() {
-        return new Jackson2JsonMessageConverter();
+    public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
+        // MQ 契约中的 createdAt 是 ISO 8601 字符串；显式关闭时间戳数组序列化，
+        // 避免 Java LocalDateTime 被编码为 [年,月,日,时,分,秒,纳秒]，导致 FastAPI 无法按契约解析。
+        ObjectMapper mqObjectMapper = objectMapper.copy()
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return new Jackson2JsonMessageConverter(mqObjectMapper);
     }
 }

@@ -164,6 +164,28 @@ paths:
                 $ref: '#/components/schemas/ResumeFileResponse'
         '404':
           $ref: '#/components/responses/NotFound'
+    delete:
+      tags:
+        - 简历
+      summary: 删除简历文件
+      operationId: deleteResume
+      parameters:
+        - name: resumeFileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   /api/resume-profiles/{profileId}:
     get:
@@ -237,6 +259,54 @@ paths:
                 $ref: '#/components/schemas/ResumeProfileResponse'
         '404':
           $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/resume-profiles/{profileId}/vectorization:
+    get:
+      tags:
+        - 简历
+      summary: 查询简历向量入库状态
+      operationId: getResumeVectorizationStatus
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeVectorizationStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/resume-profiles/{profileId}/vectorization/retry:
+    post:
+      tags:
+        - 简历
+      summary: 重试简历向量入库
+      operationId: retryResumeVectorization
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 重试任务已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResumeVectorizationStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationError'
 
@@ -374,7 +444,6 @@ components:
       required:
         - code
         - message
-        - data
         - traceId
         - timestamp
       properties:
@@ -386,10 +455,6 @@ components:
           type: string
           description: 响应消息
           example: "操作成功"
-        data:
-          type: object
-          nullable: true
-          description: 响应数据
         traceId:
           type: string
           format: uuid
@@ -644,6 +709,52 @@ components:
           properties:
             data:
               $ref: '#/components/schemas/ResumeProfile'
+
+    ResumeVectorizationStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ResumeVectorizationStatus'
+
+    ResumeVectorizationStatus:
+      type: object
+      required:
+        - resumeProfileId
+        - profileVersion
+        - status
+      properties:
+        resumeProfileId:
+          type: string
+          description: 简历画像 ID
+        profileVersion:
+          type: integer
+          description: 当前简历画像版本号
+        taskId:
+          type: string
+          nullable: true
+          description: 向量入库任务 ID
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, SUCCESS, FAILED, RETRYING]
+          description: 向量入库任务状态
+        retryCount:
+          type: integer
+          description: 已使用的重试次数
+        chunksCount:
+          type: integer
+          nullable: true
+          description: 成功写入的切片数量
+        errorMessage:
+          type: string
+          nullable: true
+          description: 最近一次失败原因
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 状态更新时间
 
     ResumeProfile:
       type: object

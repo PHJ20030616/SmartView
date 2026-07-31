@@ -177,6 +177,29 @@ class ResumeProfileServiceTest {
     }
 
     @Test
+    void handleResult_shouldFinalizeWhenWorkerAlreadyExhaustedRetries() {
+        ResumeParseResultMessage message = buildFailureMessage(
+                "task-002-worker-exhausted", "1", "AI 服务持续不可用");
+        message.setRetryCount(3);
+        AiTask aiTask = buildAiTask("task-002-worker-exhausted", TaskStatus.PENDING.getCode());
+        aiTask.setRetryCount(0);
+        aiTask.setMaxRetry(3);
+        ResumeFile resumeFile = buildResumeFile(1L, 100L);
+        resumeFile.setParseTaskId("task-002-worker-exhausted");
+        when(aiTaskMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(aiTask);
+        when(resumeFileMapper.selectById(1L)).thenReturn(resumeFile);
+
+        service.handleResult(message);
+
+        // worker 已用尽重试预算时，Spring 必须立即结束任务，不能重新进入调度轮询。
+        assertThat(aiTask.getRetryCount()).isEqualTo(3);
+        assertThat(aiTask.getTaskStatus()).isEqualTo(TaskStatus.FAILED.getCode());
+        assertThat(aiTask.getFinishedAt()).isNotNull();
+        assertThat(resumeFile.getParseStatus()).isEqualTo(ParseStatus.FAILED.getCode());
+        assertThat(resumeFile.getErrorMessage()).isEqualTo("AI 服务持续不可用");
+    }
+
+    @Test
     void handleResult_shouldSkipWhenTaskAlreadySuccess() {
         ResumeParseResultMessage message = buildSuccessMessage("task-003", "1");
         AiTask aiTask = buildAiTask("task-003", TaskStatus.SUCCESS.getCode());

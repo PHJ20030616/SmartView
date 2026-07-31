@@ -147,7 +147,10 @@ def test_resume_url_enforces_configured_storage_host() -> None:
     with pytest.raises(AppError) as exc_info:
         resume_parser._validate_download_url(
             "https://untrusted.example.com/resume.pdf",
-            Settings(_env_file=None, resume_allowed_hosts=["minio.example.com"]),
+            Settings(
+                _env_file=None,
+                resume_allowed_origins=["https://minio.example.com:443"],
+            ),
         )
 
     assert exc_info.value.code == "RESUME_URL_NOT_ALLOWED"
@@ -161,7 +164,10 @@ def test_resume_url_allows_private_ip_for_configured_storage_host(monkeypatch) -
 
     result = resume_parser._validate_download_url(
         "http://minio.local:9000/resume.pdf",
-        Settings(_env_file=None, resume_allowed_hosts=["minio.local"]),
+        Settings(
+            _env_file=None,
+            resume_allowed_origins=["http://minio.local:9000"],
+        ),
     )
 
     assert result == "http://minio.local:9000/resume.pdf"

@@ -6,7 +6,9 @@ import com.smartview.common.enums.TaskStatus;
 import com.smartview.config.properties.ResumeProperties;
 import com.smartview.infra.minio.MinioService;
 import com.smartview.resume.entity.ResumeFile;
+import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeFileMapper;
+import com.smartview.resume.mapper.ResumeProfileMapper;
 import com.smartview.task.entity.AiTask;
 import com.smartview.task.mapper.AiTaskMapper;
 import com.smartview.task.mq.ResumeTaskProducer;
@@ -36,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,7 +50,13 @@ class ResumeFileServiceTest {
     private ResumeFileMapper resumeFileMapper;
 
     @Mock
+    private ResumeProfileMapper resumeProfileMapper;
+
+    @Mock
     private AiTaskMapper aiTaskMapper;
+
+    @Mock
+    private ResumeVectorizationService resumeVectorizationService;
 
     @Mock
     private MinioService minioService;
@@ -69,7 +78,7 @@ class ResumeFileServiceTest {
         resumeProperties.getMq().setMaxScheduledRetryCount(3);
 
         // afterCommit 回调依赖独立事务；单元测试用同步执行模拟 TransactionTemplate 的新事务边界。
-        doAnswer(invocation -> {
+        lenient().doAnswer(invocation -> {
             Consumer<?> callback = invocation.getArgument(0);
             callback.accept(null);
             return null;
@@ -77,10 +86,12 @@ class ResumeFileServiceTest {
 
         service = new ResumeFileService(
                 resumeFileMapper,
+                resumeProfileMapper,
                 aiTaskMapper,
                 minioService,
                 resumeTaskProducer,
                 resumeProperties,
+                resumeVectorizationService,
                 transactionTemplate
         );
         TransactionSynchronizationManager.initSynchronization();
@@ -149,6 +160,57 @@ class ResumeFileServiceTest {
         verify(resumeFileMapper).update(isNull(), fileUpdateCaptor.capture());
         assertThat(fileUpdateCaptor.getValue().getParamNameValuePairs().values())
                 .contains(ParseStatus.PENDING.getCode());
+    }
+
+    @Test
+    void deleteResume_shouldSoftDeleteAllProfilesAndScheduleDerivedDataCleanup() {
+        ResumeFile resumeFile = ResumeFile.builder()
+                .id(88L)
+                .userId(7L)
+                .objectKey("resumes/7/old-resume.pdf")
+                .build();
+        ResumeProfile firstProfile = ResumeProfile.builder()
+                .id(101L)
+                .userId(7L)
+                .resumeFileId(88L)
+                .version(1)
+                .build();
+        ResumeProfile secondProfile = ResumeProfile.builder()
+                .id(102L)
+                .userId(7L)
+                .resumeFileId(88L)
+                .version(2)
+                .build();
+        when(resumeFileMapper.selectOne(any())).thenReturn(resumeFile);
+        when(resumeProfileMapper.selectList(any()))
+                .thenReturn(List.of(firstProfile, secondProfile));
+
+        service.deleteResume(88L, 7L);
+
+        verify(resumeVectorizationService).ensureDeleteTask(firstProfile);
+        verify(resumeVectorizationService).ensureDeleteTask(secondProfile);
+        verify(resumeProfileMapper).deleteById(101L);
+        verify(resumeProfileMapper).deleteById(102L);
+        verify(resumeFileMapper).deleteById(88L);
+        verify(minioService, never()).deleteFile(any());
+
+        runAfterCommitCallbacks();
+
+        verify(minioService).deleteFile("resumes/7/old-resume.pdf");
+    }
+
+    @Test
+    void deleteResume_shouldNotDeleteWhenFileDoesNotBelongToCurrentUser() {
+        when(resumeFileMapper.selectOne(any())).thenReturn(null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.deleteResume(88L, 99L))
+                .isInstanceOf(com.smartview.common.exception.BusinessException.class)
+                .hasMessage("简历文件不存在");
+
+        verify(resumeProfileMapper, never()).selectList(any());
+        verify(resumeFileMapper, never()).deleteById(anyLong());
+        verify(resumeVectorizationService, never()).ensureDeleteTask(any());
     }
 
     @ParameterizedTest

@@ -4,9 +4,10 @@ import type { paths } from './generated/schema';
 // 创建类型安全的 fetcher 实例，绑定到 OpenAPI 契约
 const fetcher = Fetcher.for<paths>();
 
-// 配置基础 URL 和默认请求头
+// 契约路径已经包含 /api 前缀，因此这里仅配置可选的服务端 origin，避免
+// 在本地代理场景下把 /api 重复拼接成 /api/api。
 fetcher.configure({
-  baseUrl: '/api',
+  baseUrl: import.meta.env.VITE_API_ORIGIN ?? '',
   init: {
     headers: {
       'Content-Type': 'application/json',

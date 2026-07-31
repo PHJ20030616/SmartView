@@ -29,6 +29,12 @@ public enum TaskType {
     RESUME_PARSE("RESUME_PARSE", "简历解析"),
 
     /**
+     * 简历向量入库
+     * 将用户确认后的简历原文、项目经历和技能描述切片并写入向量库
+     */
+    RESUME_VECTORIZE("RESUME_VECTORIZE", "简历向量入库"),
+
+    /**
      * 画像分析
      * 基于简历画像生成候选人能力评估、职业发展建议等
      */

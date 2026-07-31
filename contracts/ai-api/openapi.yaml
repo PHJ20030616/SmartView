@@ -32,6 +32,9 @@ paths:
       responses:
         '200':
           description: 服务健康
+          headers:
+            X-Trace-Id:
+              $ref: '#/components/headers/XTraceId'
           content:
             application/json:
               schema:
@@ -64,24 +67,36 @@ paths:
       responses:
         '200':
           description: 解析成功
+          headers:
+            X-Trace-Id:
+              $ref: '#/components/headers/XTraceId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ParseResumeResponse'
         '401':
           description: 接口鉴权失败
+          headers:
+            X-Trace-Id:
+              $ref: '#/components/headers/XTraceId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: 请求参数校验失败
+          headers:
+            X-Trace-Id:
+              $ref: '#/components/headers/XTraceId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: AI 服务鉴权配置缺失
+          headers:
+            X-Trace-Id:
+              $ref: '#/components/headers/XTraceId'
           content:
             application/json:
               schema:
@@ -224,6 +239,13 @@ components:
       in: header
       name: X-API-Key
       description: 固定 API Key 认证
+
+  headers:
+    XTraceId:
+      description: 链路追踪 ID，与请求头 X-Trace-Id 一致，用于跨服务关联日志
+      schema:
+        type: string
+        format: uuid
 
   schemas:
     ContactInfo:
