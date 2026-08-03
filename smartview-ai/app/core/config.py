@@ -10,6 +10,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -114,6 +115,17 @@ class Settings(BaseSettings):
         default=SecretStr("123456"),
         alias="MYSQL_PASSWORD",
     )
+    # Chroma 连接模式：http=连接 Docker 部署的 Chroma server（默认）；persistent=本地嵌入式目录。
+    # 默认走 http 是为了让 Python 后端与 Walnut UI 等外部工具观察同一份向量数据，
+    # 避免本地嵌入式目录与 server 各自独立造成"UI 看不到集合"的存储隔离问题。
+    # 使用 Literal 约束取值，配置拼写错误时启动即报错，而不是静默回退到本地目录。
+    chroma_mode: Literal["http", "persistent"] = Field(
+        default="http", alias="CHROMA_MODE"
+    )
+    chroma_host: str = Field(default="localhost", alias="CHROMA_HOST")
+    chroma_port: int = Field(default=8001, alias="CHROMA_PORT", gt=0)
+    chroma_ssl: bool = Field(default=False, alias="CHROMA_SSL")
+    # 仅 persistent 模式使用的本地持久化目录；http 模式下被忽略。
     chroma_persist_directory: str = Field(
         default="./data/chroma",
         alias="CHROMA_PERSIST_DIRECTORY",
@@ -161,6 +173,23 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = Field(default=4096, gt=0)
     deepseek_temperature: float = Field(default=0.1, ge=0, le=2)
     deepseek_max_input_characters: int = Field(default=60_000, gt=0)
+
+    # Qwen 文本向量模型（Embedding）：替换 Chroma 默认的英文 all-MiniLM-L6-v2，
+    # 通过 OpenAI 兼容接口调用，中文检索效果更好。文档入库与查询共用同一模型，
+    # 保证向量维度一致（qwen3.7-text-embedding 为 1024 维）。仅 Python 后端使用。
+    # 密钥使用 SecretStr，避免在配置对象 repr 或异常信息中意外泄露。
+    qwen_embedding_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        alias="QWEN_EMBEDDING_API_KEY",
+    )
+    qwen_embedding_base_url: str = Field(
+        default="",
+        alias="QWEN_EMBEDDING_BASE_URL",
+    )
+    qwen_embedding_model: str = Field(
+        default="qwen3.7-text-embedding",
+        alias="QWEN_EMBEDDING_MODEL",
+    )
 
     # 文档处理限制用于防止异常大的远程文件和 PDF 消耗过多内存或 CPU。
     resume_max_file_bytes: int = Field(default=10 * 1024 * 1024, gt=0)

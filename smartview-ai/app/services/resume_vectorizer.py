@@ -38,13 +38,21 @@ def build_mysql_engine(settings: Settings) -> Engine:
 
 
 def build_chroma_collection(settings: Settings) -> Any:
-    """创建持久化 Chroma collection；导入放在函数内以便单元测试无需启动 Chroma。"""
-    import chromadb
+    """创建 Chroma collection；导入放在函数内以便单元测试无需启动 Chroma。
 
-    client = chromadb.PersistentClient(path=settings.chroma_persist_directory)
+    embedding_function 固定传入 QwenEmbeddingFunction，与知识库 collection
+    保持一致，统一使用 Qwen 文本向量模型编码。客户端连接方式复用
+    get_chroma_client（默认连 Docker Chroma server），保证简历向量与知识库
+    同库存储，Walnut UI 可直接观察同一份数据。
+    """
+    from app.clients.chroma_client import get_chroma_client
+    from app.clients.qwen_embedding import QwenEmbeddingFunction
+
+    client = get_chroma_client(settings)
     return client.get_or_create_collection(
         name=settings.chroma_collection_name,
         metadata={"hnsw:space": "cosine"},
+        embedding_function=QwenEmbeddingFunction(settings),
     )
 
 

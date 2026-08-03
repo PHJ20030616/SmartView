@@ -10,27 +10,43 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Sequence
 
+from app.clients.qwen_embedding import QwenEmbeddingFunction
 from app.core.config import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
 
 def get_chroma_client(settings: Settings) -> Any:
-    """创建持久化 Chroma 客户端。
+    """创建 Chroma 客户端。
 
-    chromadb 依赖较重且需要本地索引文件，延迟导入以便单元测试和
-    不需要向量库的模块可以完全不依赖 chromadb。
+    默认连接 Docker 部署的 Chroma HTTP server（CHROMA_MODE=http），使 Python 后端
+    与 Walnut UI 等外部工具观察同一份向量数据，避免本地嵌入式目录与 server
+    各自独立造成"UI 看不到集合"的存储隔离问题。也可通过 CHROMA_MODE=persistent
+    回退到本地持久化目录，供单元测试等无需启动 server 的场景使用。
+
+    chromadb 依赖较重，延迟导入以便单元测试和不需要向量库的模块可以完全不依赖 chromadb。
     """
     import chromadb
 
+    if settings.chroma_mode == "http":
+        return chromadb.HttpClient(
+            host=settings.chroma_host,
+            port=settings.chroma_port,
+            ssl=settings.chroma_ssl,
+        )
     return chromadb.PersistentClient(path=settings.chroma_persist_directory)
 
 
 def get_or_create_collection(settings: Settings, name: str) -> Any:
-    """按名称获取或创建知识 collection，统一使用余弦距离。"""
+    """按名称获取或创建知识 collection，统一使用余弦距离与 Qwen 文本向量模型。
+
+    embedding_function 固定传入 QwenEmbeddingFunction，保证文档入库与查询
+    由同一模型编码、维度一致；否则会用 Chroma 默认的英文 all-MiniLM-L6-v2。
+    """
     return get_chroma_client(settings).get_or_create_collection(
         name=name,
         metadata={"hnsw:space": "cosine"},
+        embedding_function=QwenEmbeddingFunction(settings),
     )
 
 

@@ -134,11 +134,30 @@ def ingest_knowledge_root(
                 by_source_type.setdefault(source_type, [])
 
     for source_type, documents in by_source_type.items():
+        prefix = ID_PREFIX[source_type]
         collection_name = _collection_name_for(settings, source_type)
+
+        if dry_run:
+            # dry-run 不创建/连接 collection：只统计待入库切片，避免重开真实
+            # collection 的副作用（例如与已持久化的旧 embedding 配置冲突）
+            for document in documents:
+                try:
+                    records = _build_chunk_records(
+                        document,
+                        prefix=prefix,
+                        max_chars=max_chars,
+                        overlap=overlap,
+                    )
+                except (OSError, UnicodeError, ValueError) as exc:
+                    # 单个文件异常不影响其他材料入库，但需要计入错误便于排查
+                    summary.errors.append(f"{document['relativePath']}：{exc}")
+                    continue
+                summary.ingested_chunks += len(records)
+            continue
+
         collection = (collections or {}).get(source_type) or _collection_factory(
             settings, source_type
         )
-        prefix = ID_PREFIX[source_type]
         # 本次校验通过文档的切片 id 与其相对路径，作为 prune 判定“多余切片”的依据
         valid_chunk_ids: set[str] = set()
         valid_relative_paths: set[str] = set()
@@ -157,13 +176,9 @@ def ingest_knowledge_root(
                 continue
             valid_chunk_ids.update(record[0] for record in records)
             valid_relative_paths.add(document["relativePath"])
-
-            if dry_run:
-                summary.ingested_chunks += len(records)
-                continue
             _write_chunks(collection, records, strategy=strategy, summary=summary)
 
-        if prune and not dry_run:
+        if prune:
             # 清理判据：源文件被删除→清理；文件仍在但本次校验失败→保留；
             # 文件校验通过→只保留本次生成的切片，索引越界的孤儿切片一并清理。
             existing_paths = _existing_relative_paths(root, source_type)
@@ -174,8 +189,7 @@ def ingest_knowledge_root(
                 valid_ids=valid_chunk_ids,
                 valid_paths=valid_relative_paths,
             )
-        if not dry_run:
-            summary.collection_counts[collection_name] = collection.count()
+        summary.collection_counts[collection_name] = collection.count()
 
     return summary
 
@@ -456,14 +470,28 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    summary = ingest_knowledge_root(
-        args.root,
-        strategy=args.strategy,
-        prune=args.prune,
-        dry_run=args.dry_run,
-        max_chars=args.chunk_size,
-        overlap=args.chunk_overlap,
-    )
+    try:
+        summary = ingest_knowledge_root(
+            args.root,
+            strategy=args.strategy,
+            prune=args.prune,
+            dry_run=args.dry_run,
+            max_chars=args.chunk_size,
+            overlap=args.chunk_overlap,
+        )
+    except Exception:
+        # 文档级别的业务错误已收集进 summary.errors，能冒泡到这里的通常是
+        # Chroma 连接/集合操作类依赖异常（chromadb 会把连接失败包装成空消息
+        # 的 ValueError，无法按类型精确识别）。log.exception 保留完整 traceback，
+        # 同时给出可操作的运维提示，避免直接抛出不直观的堆栈。
+        log.exception("知识库入库失败")
+        print(
+            "ERROR 入库失败：请确认 Docker Chroma server 已启动且端口可访问"
+            "（docker compose -f smartview-infra/docker-compose.yml up -d），"
+            "并检查 QWEN_EMBEDDING_API_KEY 是否已配置。",
+            file=sys.stderr,
+        )
+        return 2
 
     payload = {
         "root": str(args.root),
