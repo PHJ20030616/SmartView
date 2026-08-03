@@ -34,6 +34,7 @@ hs_err_pid*
 
 # 环境变量和配置文件
 .env
+gptpdf\.env
 smartview-ai\.env
 smartview-infra\.env
 .env.local
@@ -102,6 +103,7 @@ chroma-data/
 # 向量库数据
 *.chroma/
 chroma_db/
+smartview-ai/data/
 
 # AI开发工具相关
 .claude/
@@ -114,3 +116,4 @@ verify_task_*.sh
 
 # 开发计划
 develop_plan/
+knowledge/

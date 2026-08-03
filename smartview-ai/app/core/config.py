@@ -2,12 +2,51 @@
 应用配置管理模块
 
 基于 Pydantic 的配置管理，支持从环境变量和 .env 文件读取配置。
+
+共享凭据策略：连接外部服务（MySQL / RabbitMQ 等）的账号密码与 base URL 统一
+放在仓库根目录的 smartview-infra/.env 作为唯一事实来源；本模块启动时先把它
+注入环境变量，再读取 smartview-ai/.env 中 Python 专属配置，避免各端凭据漂移。
 """
+import os
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _resolve_infra_env_path() -> str:
+    """解析共享 infra .env 路径：SMARTVIEW_INFRA_ENV_FILE 优先，否则指向仓库根目录。"""
+    env_file = os.environ.get("SMARTVIEW_INFRA_ENV_FILE")
+    if env_file:
+        return env_file
+    # config.py 位于 smartview-ai/app/core/，仓库根目录是其 parents[3]
+    return str(Path(__file__).resolve().parents[3] / "smartview-infra" / ".env")
+
+
+def _load_shared_infra_env(env_file: str | None = None) -> None:
+    """把 smartview-infra/.env 的共享凭据加载进环境变量（不覆盖已有真实环境变量）。
+
+    设计原因：MySQL / RabbitMQ 等账号密码被 Spring Boot 与 Python 后端共用，
+    若各端各自维护一份 .env，凭据容易漂移不一致。这里统一以仓库根的
+    smartview-infra/.env 为唯一事实来源，启动时注入 os.environ；
+    Pydantic 的环境变量优先级高于 .env 文件，因此共享字段自动生效。
+
+    - 路径可用环境变量 SMARTVIEW_INFRA_ENV_FILE 覆盖（Docker 场景由编排注入），
+      默认指向 仓库根/smartview-infra/.env；
+    - override=False：不覆盖进程里已有的真实环境变量，保证部署侧注入优先；
+    - 文件不存在时静默跳过，本地未配置基础设施也可用代码默认值启动。
+    """
+    if not env_file:
+        env_file = _resolve_infra_env_path()
+    if not Path(env_file).is_file():
+        return
+    load_dotenv(env_file, override=False)
+
+
+_load_shared_infra_env()
 
 
 class Settings(BaseSettings):
@@ -64,11 +103,13 @@ class Settings(BaseSettings):
     rabbitmq_reconnect_delay_seconds: float = Field(default=5.0, gt=0)
     rabbitmq_prefetch_count: int = Field(default=1, gt=0)
 
-    # 向量入库依赖；FastAPI 只读取已确认画像，不直接接受前端传入的完整简历。
+    # 向量入库依赖：FastAPI 只读取已确认画像，不直接接受前端传入的完整简历。
+    # MySQL/RabbitMQ 账号密码等共享凭据统一由 smartview-infra/.env 注入，
+    # 这里只保留与 Spring 一致的代码兜底默认值（本地 MySQL 默认创建 root）。
     mysql_host: str = Field(default="localhost", alias="MYSQL_HOST")
     mysql_port: int = Field(default=3306, alias="MYSQL_PORT", gt=0)
     mysql_database: str = Field(default="smartview", alias="MYSQL_DATABASE")
-    mysql_username: str = Field(default="smartview", alias="MYSQL_USERNAME")
+    mysql_username: str = Field(default="root", alias="MYSQL_USERNAME")
     mysql_password: SecretStr = Field(
         default=SecretStr("123456"),
         alias="MYSQL_PASSWORD",
@@ -80,6 +121,16 @@ class Settings(BaseSettings):
     chroma_collection_name: str = Field(
         default="resume_profile_chunks",
         alias="CHROMA_COLLECTION_NAME",
+    )
+    # 知识库离线入库使用独立 collection：八股与面经分离，避免检索时互相污染；
+    # 集合名可通过环境变量覆盖，默认值与 Task 4.2 验收要求保持一致。
+    chroma_knowledge_collection_name: str = Field(
+        default="interview_knowledge_base",
+        alias="CHROMA_KNOWLEDGE_COLLECTION_NAME",
+    )
+    chroma_experience_collection_name: str = Field(
+        default="interview_experience_cases",
+        alias="CHROMA_EXPERIENCE_COLLECTION_NAME",
     )
     resume_vector_chunk_size: int = Field(
         default=800,
