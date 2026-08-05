@@ -8,9 +8,15 @@
 
 ## 路径版本策略
 
-- **第一版不带版本号**：如 `/api/auth/login`、`/api/resumes`
+- **第一版不带版本号**：如 `/api/auth/login`、`/api/resumes`、`/api/profile-analyses`
 - **后续版本显式版本化**：如 `/api/v2/auth/login`
 - **原因**：第一版作为默认版本，简化 URL；需要破坏性变更时再引入版本号
+
+## 画像分析端点
+
+- `POST /api/profile-analyses`：用户选择面试方向后触发/获取方向画像分析（幂等）
+- `GET /api/profile-analyses/{profileId}?roleDirection=`：轮询画像分析状态
+- `POST /api/profile-analyses/{profileId}/retry?roleDirection=`：分析失败后重试
 
 ## 使用规范
 

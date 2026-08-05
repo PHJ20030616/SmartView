@@ -7,11 +7,16 @@ FastAPI AI 服务基础工程，只对 Spring Boot 后端开放能力接口。Re
 ```bash
 cd smartview-ai
 python -m venv venv
-venv\Scripts\activate
+
+
 python -m pip install -e ".[test,ocr]"
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 python -m app.workers.resume_worker
+
+python -m app.workers.resume_vectorize_worker
+
+python -m app.workers.profile_worker
 ```
 
 简历解析采用独立 RabbitMQ worker 消费 `smartview.resume.parse` 队列。启动 FastAPI

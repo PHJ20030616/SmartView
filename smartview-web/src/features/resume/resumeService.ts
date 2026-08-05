@@ -1,15 +1,20 @@
 import type {
+  ProfileAnalysisStatus,
   ResumeFile,
   ResumeProfile,
   ResumeVectorizationStatus,
+  RoleDirection,
   UpdateResumeProfileRequest,
 } from "./resumeTypes";
 import {
   confirmResumeProfileApi,
+  getProfileAnalysisStatusApi,
   getResumeFileApi,
   getResumeProfileApi,
   getResumeVectorizationStatusApi,
+  retryProfileAnalysisApi,
   retryResumeVectorizationApi,
+  startProfileAnalysisApi,
   updateResumeProfileApi,
   uploadResumeApi,
 } from "./resumeApi";
@@ -239,6 +244,175 @@ export async function retryResumeVectorization(
   signal?: AbortSignal,
 ): Promise<ResumeVectorizationStatus> {
   return retryResumeVectorizationApi(profileId, signal);
+}
+
+/** 画像分析轮询终态错误，保留最近一次后端状态供页面显示重试入口。 */
+export class ProfileAnalysisError extends Error {
+  readonly status?: ProfileAnalysisStatus;
+  readonly timedOut: boolean;
+
+  constructor(
+    message: string,
+    status?: ProfileAnalysisStatus,
+    timedOut = false,
+  ) {
+    super(message);
+    this.name = "ProfileAnalysisError";
+    this.status = status;
+    this.timedOut = timedOut;
+  }
+}
+
+/**
+ * 从异常中提取可读的业务错误信息，供页面失败态展示。
+ *
+ * 优先取后端返回的 ApiResponse.message（如"简历向量尚未入库完成"），
+ * 其次取 ProfileAnalysisError 的消息，最后回退到 Error.message；
+ * Axios 的默认 message 只是"Request failed with status code XXX"，不展示给用户。
+ */
+export function extractErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ProfileAnalysisError) {
+    return error.message;
+  }
+  if (error instanceof Error && "isAxiosError" in error) {
+    const serverMessage = (
+      error as { response?: { data?: { message?: string } } }
+    ).response?.data?.message;
+    if (serverMessage) {
+      return serverMessage;
+    }
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * 触发或获取方向画像分析。
+ * 幂等：已有成功分析或进行中任务时后端直接返回对应状态。
+ */
+export async function startProfileAnalysis(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  return startProfileAnalysisApi(profileId, roleDirection, signal);
+}
+
+/**
+ * 查询当前画像在指定方向的画像分析状态。
+ */
+export async function fetchProfileAnalysisStatus(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  return getProfileAnalysisStatusApi(profileId, roleDirection, signal);
+}
+
+/**
+ * 画像分析失败后创建新的分析任务。
+ */
+export async function retryProfileAnalysis(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  return retryProfileAnalysisApi(profileId, roleDirection, signal);
+}
+
+/**
+ * 轮询画像分析状态，成功才返回；失败或 60 秒超时交给页面展示重试入口。
+ *
+ * 与 waitForResumeVectorization 相同的轮询语义：后端只负责查询状态，
+ * 是否重新触发由调用方（触发接口或重试接口）完成。
+ */
+export async function waitForProfileAnalysis(
+  profileId: string,
+  roleDirection: RoleDirection,
+  onStatus?: (status: ProfileAnalysisStatus) => void,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  const deadline = Date.now() + VECTOR_POLL_MAX_DURATION_MS;
+  const deadlineController = new AbortController();
+  const handleExternalAbort = () => deadlineController.abort();
+  const timeoutId = setTimeout(
+    () => deadlineController.abort(),
+    VECTOR_POLL_MAX_DURATION_MS,
+  );
+  signal?.addEventListener("abort", handleExternalAbort, { once: true });
+
+  let status: ProfileAnalysisStatus | undefined;
+  try {
+    status = await getProfileAnalysisStatusApi(
+      profileId,
+      roleDirection,
+      deadlineController.signal,
+    );
+    throwIfProfileAnalysisDeadlineExceeded(deadline, deadlineController.signal);
+    onStatus?.(status);
+
+    while (true) {
+      if (status.status === "SUCCESS") {
+        return status;
+      }
+      if (status.status === "FAILED") {
+        throw new ProfileAnalysisError(
+          status.errorMessage || "画像分析失败，请重试",
+          status,
+        );
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+      await sleep(
+        Math.min(POLL_INTERVAL_MS, remaining),
+        deadlineController.signal,
+      );
+      throwIfProfileAnalysisDeadlineExceeded(deadline, deadlineController.signal);
+      status = await getProfileAnalysisStatusApi(
+        profileId,
+        roleDirection,
+        deadlineController.signal,
+      );
+      throwIfProfileAnalysisDeadlineExceeded(deadline, deadlineController.signal);
+      onStatus?.(status);
+    }
+
+    throw new ProfileAnalysisError(
+      "画像分析等待超时，请点击重试",
+      status,
+      true,
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+    if (deadlineController.signal.aborted) {
+      throw new ProfileAnalysisError(
+        "画像分析等待超时，请点击重试",
+        status,
+        true,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", handleExternalAbort);
+  }
+}
+
+function throwIfProfileAnalysisDeadlineExceeded(
+  deadline: number,
+  deadlineSignal: AbortSignal,
+): void {
+  if (deadlineSignal.aborted || Date.now() >= deadline) {
+    throw new ProfileAnalysisError(
+      "画像分析等待超时，请点击重试",
+      undefined,
+      true,
+    );
+  }
 }
 
 /**

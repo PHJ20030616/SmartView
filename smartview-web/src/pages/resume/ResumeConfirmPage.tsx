@@ -646,7 +646,9 @@ export default function ResumeConfirmPage() {
                   {vectorizationReady ? (
                     <Button
                       icon={<CheckOutlined />}
-                      onClick={() => navigate("/interview")}
+                      onClick={() =>
+                        navigate(`/interview?profileId=${profile.id}`)
+                      }
                       type="primary"
                     >
                       选择面试方向

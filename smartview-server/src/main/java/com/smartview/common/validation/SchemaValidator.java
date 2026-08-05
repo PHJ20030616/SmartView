@@ -53,6 +53,14 @@ public class SchemaValidator {
      */
     private JsonSchema resumeVectorizeResultSchema;
 
+    /**
+     * 画像分析结果 Schema，启动时强制加载。
+     *
+     * 分析结果会驱动 ai_task 终态更新，并在成功时写入 profile_analysis 表，
+     * 必须先通过契约校验，避免错误方向、旧版本或缺失字段污染分析数据。
+     */
+    private JsonSchema profileAnalyzeResultSchema;
+
     public SchemaValidator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -81,7 +89,13 @@ public class SchemaValidator {
                     "无法加载 resume_vectorize_result.schema.json，"
                             + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
         }
-        log.info("resume_parse_result 和 resume_vectorize_result Schema 加载成功");
+        profileAnalyzeResultSchema = loadSchema("/contracts/mq/profile_analyze_result.schema.json");
+        if (profileAnalyzeResultSchema == null) {
+            throw new IllegalStateException(
+                    "无法加载 profile_analyze_result.schema.json，"
+                            + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
+        }
+        log.info("resume_parse_result、resume_vectorize_result 和 profile_analyze_result Schema 加载成功");
     }
 
     /**
@@ -104,6 +118,16 @@ public class SchemaValidator {
      */
     public void validateResumeVectorizeResult(Object message) {
         validate(message, resumeVectorizeResultSchema);
+    }
+
+    /**
+     * 校验画像分析结果消息是否符合契约定义。
+     *
+     * @param message 待校验的消息对象
+     * @throws IllegalArgumentException 校验失败时抛出
+     */
+    public void validateProfileAnalyzeResult(Object message) {
+        validate(message, profileAnalyzeResultSchema);
     }
 
     /**

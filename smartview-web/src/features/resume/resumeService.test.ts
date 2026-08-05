@@ -1,24 +1,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ResumeFile, ResumeVectorizationStatus } from "./resumeTypes";
+import type {
+  ProfileAnalysisStatus,
+  ResumeFile,
+  ResumeVectorizationStatus,
+} from "./resumeTypes";
 import {
+  getProfileAnalysisStatusApi,
   getResumeFileApi,
   getResumeVectorizationStatusApi,
+  retryProfileAnalysisApi,
   retryResumeVectorizationApi,
+  startProfileAnalysisApi,
   uploadResumeApi,
 } from "./resumeApi";
 import {
+  retryProfileAnalysis,
   retryResumeVectorization,
+  startProfileAnalysis,
   uploadAndWaitForParse,
+  waitForProfileAnalysis,
   waitForResumeVectorization,
 } from "./resumeService";
 
 vi.mock("./resumeApi", () => ({
   confirmResumeProfileApi: vi.fn(),
+  getProfileAnalysisStatusApi: vi.fn(),
   getResumeFileApi: vi.fn(),
   getResumeProfileApi: vi.fn(),
   getResumeVectorizationStatusApi: vi.fn(),
+  retryProfileAnalysisApi: vi.fn(),
   retryResumeVectorizationApi: vi.fn(),
+  startProfileAnalysisApi: vi.fn(),
   updateResumeProfileApi: vi.fn(),
   uploadResumeApi: vi.fn(),
 }));
@@ -27,6 +40,9 @@ const uploadResumeMock = vi.mocked(uploadResumeApi);
 const getResumeFileMock = vi.mocked(getResumeFileApi);
 const getVectorizationStatusMock = vi.mocked(getResumeVectorizationStatusApi);
 const retryVectorizationMock = vi.mocked(retryResumeVectorizationApi);
+const getProfileAnalysisStatusMock = vi.mocked(getProfileAnalysisStatusApi);
+const startProfileAnalysisMock = vi.mocked(startProfileAnalysisApi);
+const retryProfileAnalysisMock = vi.mocked(retryProfileAnalysisApi);
 
 describe("简历上传解析服务", () => {
   afterEach(() => {
@@ -231,5 +247,132 @@ describe("简历向量入库轮询服务", () => {
       status: "PENDING",
     });
     expect(retryVectorizationMock).toHaveBeenCalledWith("profile-5", undefined);
+  });
+});
+
+describe("画像分析轮询服务", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  const status = (overrides: Partial<ProfileAnalysisStatus> = {}): ProfileAnalysisStatus => ({
+    profileId: "profile-1",
+    profileVersion: 2,
+    roleDirection: "JAVA_BACKEND",
+    status: "PENDING",
+    retryCount: 0,
+    ...overrides,
+  });
+
+  it("只有收到 SUCCESS 才结束画像分析轮询并返回状态", async () => {
+    vi.useFakeTimers();
+    getProfileAnalysisStatusMock
+      .mockResolvedValueOnce(status())
+      .mockResolvedValueOnce(
+        status({ status: "PROCESSING", taskId: "task-1" }),
+      )
+      .mockResolvedValueOnce(
+        status({
+          status: "SUCCESS",
+          profileAnalysisId: "analysis-1",
+          taskId: "task-1",
+        }),
+      );
+
+    const statuses: string[] = [];
+    const pending = waitForProfileAnalysis(
+      "profile-1",
+      "JAVA_BACKEND",
+      (next) => statuses.push(next.status),
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    await expect(pending).resolves.toMatchObject({
+      status: "SUCCESS",
+      profileAnalysisId: "analysis-1",
+    });
+    expect(statuses).toEqual(["PENDING", "PROCESSING", "SUCCESS"]);
+    expect(getProfileAnalysisStatusMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("收到 FAILED 时停止轮询并保留后端状态供页面重试", async () => {
+    getProfileAnalysisStatusMock.mockResolvedValue(
+      status({
+        status: "FAILED",
+        errorMessage: "LLM 服务暂时不可用",
+        taskId: "task-1",
+      }),
+    );
+
+    await expect(
+      waitForProfileAnalysis("profile-1", "JAVA_BACKEND"),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "ProfileAnalysisError",
+        message: "LLM 服务暂时不可用",
+        status: expect.objectContaining({ status: "FAILED" }),
+      }),
+    );
+    expect(getProfileAnalysisStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("画像分析最多等待 60 秒，超时后返回可重试错误", async () => {
+    vi.useFakeTimers();
+    getProfileAnalysisStatusMock.mockResolvedValue(
+      status({ status: "PROCESSING" }),
+    );
+
+    const pending = waitForProfileAnalysis("profile-1", "JAVA_BACKEND");
+    const timeoutAssertion = expect(pending).rejects.toEqual(
+      expect.objectContaining({
+        name: "ProfileAnalysisError",
+        timedOut: true,
+        message: "画像分析等待超时，请点击重试",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await timeoutAssertion;
+  });
+
+  it("触发方向画像分析时把方向和画像 ID 传给后端", async () => {
+    startProfileAnalysisMock.mockResolvedValue(
+      status({
+        status: "SUCCESS",
+        profileAnalysisId: "analysis-2",
+        roleDirection: "AGENT_DEVELOPMENT",
+      }),
+    );
+
+    await expect(
+      startProfileAnalysis("profile-1", "AGENT_DEVELOPMENT"),
+    ).resolves.toMatchObject({
+      status: "SUCCESS",
+      roleDirection: "AGENT_DEVELOPMENT",
+    });
+    expect(startProfileAnalysisMock).toHaveBeenCalledWith(
+      "profile-1",
+      "AGENT_DEVELOPMENT",
+      undefined,
+    );
+  });
+
+  it("画像分析失败后可以创建新的重试任务", async () => {
+    retryProfileAnalysisMock.mockResolvedValue(
+      status({ status: "PENDING", taskId: "task-retry-1" }),
+    );
+
+    await expect(
+      retryProfileAnalysis("profile-1", "JAVA_BACKEND"),
+    ).resolves.toMatchObject({
+      taskId: "task-retry-1",
+      status: "PENDING",
+    });
+    expect(retryProfileAnalysisMock).toHaveBeenCalledWith(
+      "profile-1",
+      "JAVA_BACKEND",
+      undefined,
+    );
   });
 });

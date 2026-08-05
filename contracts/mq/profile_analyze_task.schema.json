@@ -58,6 +58,7 @@
     },
     "profileVersion": {
       "type": "integer",
+      "minimum": 1,
       "description": "简历画像版本号，确保使用正确版本的简历数据"
     },
     "vectorizeCompleted": {

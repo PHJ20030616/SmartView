@@ -62,6 +62,13 @@ public class RabbitMQConfig {
     public static final String QUEUE_RESUME_VECTORIZE = "smartview.resume.vectorize.v1";
     public static final String ROUTING_KEY_RESUME_VECTORIZE = "resume.vectorize.task";
 
+    /*
+     * 画像分析任务队列：用户选择面试方向后由 Spring 投递，FastAPI worker 消费
+     * 生成方向画像分析。使用 v1 后缀避免与旧队列声明参数冲突（与向量队列同策略）。
+     */
+    public static final String QUEUE_PROFILE_ANALYZE = "smartview.profile.analyze.v1";
+    public static final String ROUTING_KEY_PROFILE_ANALYZE = "profile.analyze.task";
+
     // ==================== 结果队列及死信队列常量 ====================
 
     /**
@@ -78,6 +85,8 @@ public class RabbitMQConfig {
     public static final String ROUTING_KEY_RESUME_PARSE_RESULT = "resume.parse.result";
     public static final String QUEUE_RESUME_VECTORIZE_RESULT = "smartview.resume.vectorize.result.v1";
     public static final String ROUTING_KEY_RESUME_VECTORIZE_RESULT = "resume.vectorize.result";
+    public static final String QUEUE_PROFILE_ANALYZE_RESULT = "smartview.profile.analyze.result.v1";
+    public static final String ROUTING_KEY_PROFILE_ANALYZE_RESULT = "profile.analyze.result";
 
     /**
      * 死信交换机，所有队列的重试耗尽消息统一路由到此
@@ -101,6 +110,18 @@ public class RabbitMQConfig {
             "smartview.resume.vectorize.result.dlq";
     private static final String ROUTING_KEY_RESUME_VECTORIZE_RESULT_DLQ =
             "resume.vectorize.result.dlq";
+
+    /*
+     * 画像分析任务/结果死信队列：消费失败超限或业务校验失败的消息转入，供人工或补偿调度处理。
+     */
+    private static final String QUEUE_PROFILE_ANALYZE_DLQ =
+            "smartview.profile.analyze.dlq";
+    private static final String ROUTING_KEY_PROFILE_ANALYZE_DLQ =
+            "profile.analyze.task.dlq";
+    private static final String QUEUE_PROFILE_ANALYZE_RESULT_DLQ =
+            "smartview.profile.analyze.result.dlq";
+    private static final String ROUTING_KEY_PROFILE_ANALYZE_RESULT_DLQ =
+            "profile.analyze.result.dlq";
 
     /**
      * 最大处理次数（首次消费 + 3 次重试 = 共 4 次机会）
@@ -164,6 +185,26 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_RESUME_VECTORIZE);
     }
 
+    @Bean
+    public Queue profileAnalyzeQueue() {
+        /*
+         * 画像分析任务消息不能因为 worker 发布结果失败而静默丢失。
+         * 进入 DLQ 后由运维或后续补偿调度依据 ai_task 租约再次投递。
+         */
+        return QueueBuilder.durable(QUEUE_PROFILE_ANALYZE)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_PROFILE_ANALYZE_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding profileAnalyzeBinding() {
+        return BindingBuilder
+                .bind(profileAnalyzeQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_PROFILE_ANALYZE);
+    }
+
     // ==================== 结果队列（FastAPI → Spring Boot） ====================
 
     /**
@@ -200,6 +241,22 @@ public class RabbitMQConfig {
                 .bind(resumeVectorizeResultQueue())
                 .to(smartviewDirectExchange())
                 .with(ROUTING_KEY_RESUME_VECTORIZE_RESULT);
+    }
+
+    @Bean
+    public Queue profileAnalyzeResultQueue() {
+        return QueueBuilder.durable(QUEUE_PROFILE_ANALYZE_RESULT)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_PROFILE_ANALYZE_RESULT_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding profileAnalyzeResultBinding() {
+        return BindingBuilder
+                .bind(profileAnalyzeResultQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_PROFILE_ANALYZE_RESULT);
     }
 
     // ==================== 任务/结果死信队列 ====================
@@ -245,6 +302,32 @@ public class RabbitMQConfig {
                 .bind(resumeVectorizeResultDlq())
                 .to(deadLetterExchange())
                 .with(ROUTING_KEY_RESUME_VECTORIZE_RESULT_DLQ);
+    }
+
+    @Bean
+    public Queue profileAnalyzeDlq() {
+        return new Queue(QUEUE_PROFILE_ANALYZE_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding profileAnalyzeDlqBinding() {
+        return BindingBuilder
+                .bind(profileAnalyzeDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_PROFILE_ANALYZE_DLQ);
+    }
+
+    @Bean
+    public Queue profileAnalyzeResultDlq() {
+        return new Queue(QUEUE_PROFILE_ANALYZE_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding profileAnalyzeResultDlqBinding() {
+        return BindingBuilder
+                .bind(profileAnalyzeResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_PROFILE_ANALYZE_RESULT_DLQ);
     }
 
     // ==================== 消费者容器工厂（带重试拦截器） ====================

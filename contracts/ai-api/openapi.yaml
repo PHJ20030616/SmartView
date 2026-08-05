@@ -118,15 +118,30 @@ paths:
               $ref: '#/components/schemas/AnalyzeProfileRequest'
       responses:
         '200':
-          description: 分析成功
+          description: 处理成功。业务失败（画像不存在/未确认、LLM 服务异常等）同样返回 200，
+            通过 AnalyzeProfileResponse.success=false 与 errorMessage 表达。
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalyzeProfileResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: 接口鉴权失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 请求参数校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
-          $ref: '#/components/responses/InternalServerError'
+          description: AI 服务鉴权配置缺失等系统级错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/interview/stage-plan:
     post:
@@ -571,6 +586,12 @@ components:
         errorMessage:
           type: string
           description: 分析失败原因
+        modelName:
+          type: string
+          description: 生成该分析结果使用的模型名称
+        modelVersion:
+          type: string
+          description: 模型版本或配置版本
 
     GenerateStagePlanRequest:
       type: object

@@ -104,6 +104,15 @@ class Settings(BaseSettings):
     rabbitmq_reconnect_delay_seconds: float = Field(default=5.0, gt=0)
     rabbitmq_prefetch_count: int = Field(default=1, gt=0)
 
+    # 画像分析任务队列/路由键，与 Spring Boot RabbitMQConfig 及 MQ 契约保持一致。
+    rabbitmq_profile_analyze_queue: str = "smartview.profile.analyze.v1"
+    rabbitmq_profile_analyze_routing_key: str = "profile.analyze.task"
+    rabbitmq_profile_analyze_result_routing_key: str = "profile.analyze.result"
+    rabbitmq_profile_analyze_dead_letter_queue: str = "smartview.profile.analyze.dlq"
+    rabbitmq_profile_analyze_dead_letter_routing_key: str = (
+        "profile.analyze.task.dlq"
+    )
+
     # 向量入库依赖：FastAPI 只读取已确认画像，不直接接受前端传入的完整简历。
     # MySQL/RabbitMQ 账号密码等共享凭据统一由 smartview-infra/.env 注入，
     # 这里只保留与 Spring 一致的代码兜底默认值（本地 MySQL 默认创建 root）。
@@ -155,6 +164,18 @@ class Settings(BaseSettings):
         ge=0,
     )
 
+    # 画像分析检索参数：简历向量片段、八股与面经各取 top_k 条进入提示词。
+    profile_analyze_resume_top_k: int = Field(
+        default=6,
+        alias="PROFILE_ANALYZE_RESUME_TOP_K",
+        gt=0,
+    )
+    profile_analyze_knowledge_top_k: int = Field(
+        default=5,
+        alias="PROFILE_ANALYZE_KNOWLEDGE_TOP_K",
+        gt=0,
+    )
+
     # CORS 跨域配置
     cors_allow_origins: list[str] = Field(default_factory=list)
 
@@ -169,7 +190,10 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     # 与当前 DeepSeek Chat Completions 可用模型保持一致，避免未配置 .env 时请求已废弃模型。
     deepseek_model: str = "deepseek-v4-flash"
-    deepseek_timeout_seconds: float = Field(default=60.0, gt=0)
+    # 画像分析的 prompt 含完整简历、向量检索与知识库材料，DeepSeek 生成 4096 token
+    # 实测可超过 60 秒；默认 120 秒避免长分析任务被默认超时中断。该超时同时作用于
+    # 简历解析（resume_parser 复用同一配置），放宽后对解析调用也是正向影响。
+    deepseek_timeout_seconds: float = Field(default=120.0, gt=0)
     deepseek_max_tokens: int = Field(default=4096, gt=0)
     deepseek_temperature: float = Field(default=0.1, ge=0, le=2)
     deepseek_max_input_characters: int = Field(default=60_000, gt=0)

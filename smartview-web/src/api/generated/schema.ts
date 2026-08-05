@@ -176,6 +176,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/profile-analyses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 触发或获取方向画像分析
+         * @description 幂等接口：用户选择面试方向后调用。 已有同方向成功分析时直接返回；已有进行中任务时返回任务状态； 分析失败时新建 PROFILE_ANALYZE 任务重新分析。 创建任务前后端会校验简历向量已成功入库。
+         */
+        post: operations["ensureProfileAnalysis"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/profile-analyses/{profileId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询画像分析状态
+         * @description 前端轮询画像分析状态，最多等待 60 秒；成功后才允许开始面试。
+         */
+        get: operations["getProfileAnalysisStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/profile-analyses/{profileId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 重试方向画像分析
+         * @description 画像分析失败时允许用户重试，重试期间不允许开始面试。
+         */
+        post: operations["retryProfileAnalysis"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/interview-sessions": {
         parameters: {
             query?: never;
@@ -461,6 +521,47 @@ export interface components {
              * @description 状态更新时间
              */
             updatedAt?: string | null;
+        };
+        ProfileAnalysisStatusResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["ProfileAnalysisStatus"];
+        };
+        ProfileAnalysisStatus: {
+            /** @description 画像分析结果 ID，分析成功时返回 */
+            profileAnalysisId?: string | null;
+            /** @description 简历画像 ID */
+            profileId: string;
+            /** @description 当前简历画像版本号 */
+            profileVersion: number;
+            /**
+             * @description 面试方向
+             * @enum {string}
+             */
+            roleDirection: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
+            /** @description 画像分析任务 ID */
+            taskId?: string | null;
+            /**
+             * @description 画像分析任务状态
+             * @enum {string}
+             */
+            status: "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED" | "RETRYING";
+            /** @description 已使用的重试次数 */
+            retryCount?: number;
+            /** @description 最近一次失败原因 */
+            errorMessage?: string | null;
+            /**
+             * Format: date-time
+             * @description 状态更新时间
+             */
+            updatedAt?: string | null;
+        };
+        StartProfileAnalysisRequest: {
+            /** @description 简历画像 ID */
+            profileId: string;
+            /**
+             * @description 面试方向
+             * @enum {string}
+             */
+            roleDirection: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
         };
         ResumeProfile: {
             /** @description 简历画像 ID */
@@ -1080,6 +1181,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResumeVectorizationStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    ensureProfileAnalysis: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartProfileAnalysisRequest"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAnalysisStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    getProfileAnalysisStatus: {
+        parameters: {
+            query: {
+                roleDirection: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
+            };
+            header?: never;
+            path: {
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAnalysisStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    retryProfileAnalysis: {
+        parameters: {
+            query: {
+                roleDirection: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
+            };
+            header?: never;
+            path: {
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重试任务已创建 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAnalysisStatusResponse"];
                 };
             };
             404: components["responses"]["NotFound"];

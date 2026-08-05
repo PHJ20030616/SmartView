@@ -22,6 +22,7 @@ import {
 } from "../features/auth";
 import HomePage from "../pages/home/HomePage";
 import InterviewPage from "../pages/interview/InterviewPage";
+import InterviewSessionPlaceholder from "../pages/interview/InterviewSessionPlaceholder";
 import LoginPage from "../pages/login/LoginPage";
 import RegisterPage from "../pages/login/RegisterPage";
 import ReportPage from "../pages/report/ReportPage";
@@ -54,6 +55,10 @@ export const appRoutes: RouteObject[] = [
               { path: "resume", element: <ResumePage /> },
               { path: "resume/confirm/:profileId", element: <ResumeConfirmPage /> },
               { path: "interview", element: <InterviewPage /> },
+              {
+                path: "interview/session",
+                element: <InterviewSessionPlaceholder />,
+              },
               { path: "report", element: <ReportPage /> },
             ],
           },

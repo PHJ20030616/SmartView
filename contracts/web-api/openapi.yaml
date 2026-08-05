@@ -310,6 +310,101 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/profile-analyses:
+    post:
+      tags:
+        - 画像分析
+      summary: 触发或获取方向画像分析
+      description: >
+        幂等接口：用户选择面试方向后调用。
+        已有同方向成功分析时直接返回；已有进行中任务时返回任务状态；
+        分析失败时新建 PROFILE_ANALYZE 任务重新分析。
+        创建任务前后端会校验简历向量已成功入库。
+      operationId: ensureProfileAnalysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartProfileAnalysisRequest'
+      responses:
+        '200':
+          description: 操作成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileAnalysisStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/profile-analyses/{profileId}:
+    get:
+      tags:
+        - 画像分析
+      summary: 查询画像分析状态
+      description: 前端轮询画像分析状态，最多等待 60 秒；成功后才允许开始面试。
+      operationId: getProfileAnalysisStatus
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: roleDirection
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileAnalysisStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/profile-analyses/{profileId}/retry:
+    post:
+      tags:
+        - 画像分析
+      summary: 重试方向画像分析
+      description: 画像分析失败时允许用户重试，重试期间不允许开始面试。
+      operationId: retryProfileAnalysis
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: roleDirection
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+      responses:
+        '200':
+          description: 重试任务已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileAnalysisStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
   /api/interview-sessions:
     post:
       tags:
@@ -755,6 +850,71 @@ components:
           format: date-time
           nullable: true
           description: 状态更新时间
+
+    ProfileAnalysisStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ProfileAnalysisStatus'
+
+    ProfileAnalysisStatus:
+      type: object
+      required:
+        - profileId
+        - profileVersion
+        - roleDirection
+        - status
+      properties:
+        profileAnalysisId:
+          type: string
+          nullable: true
+          description: 画像分析结果 ID，分析成功时返回
+        profileId:
+          type: string
+          description: 简历画像 ID
+        profileVersion:
+          type: integer
+          description: 当前简历画像版本号
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
+        taskId:
+          type: string
+          nullable: true
+          description: 画像分析任务 ID
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, SUCCESS, FAILED, RETRYING]
+          description: 画像分析任务状态
+        retryCount:
+          type: integer
+          description: 已使用的重试次数
+        errorMessage:
+          type: string
+          nullable: true
+          description: 最近一次失败原因
+        updatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 状态更新时间
+
+    StartProfileAnalysisRequest:
+      type: object
+      required:
+        - profileId
+        - roleDirection
+      properties:
+        profileId:
+          type: string
+          description: 简历画像 ID
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
 
     ResumeProfile:
       type: object

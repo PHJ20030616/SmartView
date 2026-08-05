@@ -11,6 +11,8 @@
     "retryCount",
     "createdAt",
     "resumeProfileId",
+    "profileVersion",
+    "roleDirection",
     "success"
   ],
   "properties": {
@@ -49,37 +51,194 @@
       "type": "string",
       "description": "简历画像 ID"
     },
+    "profileVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "简历画像版本号，防止旧版本任务结果覆盖新版本分析"
+    },
+    "roleDirection": {
+      "type": "string",
+      "enum": ["JAVA_BACKEND", "AGENT_DEVELOPMENT"],
+      "description": "面试方向，画像分析按方向分别生成"
+    },
     "success": {
       "type": "boolean",
       "description": "分析是否成功"
     },
     "skillTags": {
       "type": "array",
-      "description": "技能标签"
+      "description": "技能标签",
+      "items": {
+        "type": "object",
+        "required": ["skill"],
+        "properties": {
+          "skill": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["EXPERT", "PROFICIENT", "FAMILIAR", "BASIC"]
+          },
+          "source": {
+            "type": "string",
+            "enum": ["WORK", "PROJECT", "EDUCATION"]
+          }
+        }
+      }
     },
     "projectGraph": {
       "type": "object",
-      "description": "项目关系图谱"
+      "description": "项目关系图谱",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "projectName": {
+                "type": "string"
+              },
+              "techStack": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "responsibilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "highlights": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "capabilityHints": {
       "type": "object",
-      "description": "能力线索"
+      "description": "能力线索",
+      "properties": {
+        "engineering": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "architecture": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "domain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
     "riskPoints": {
       "type": "array",
-      "description": "风险点"
+      "description": "风险点",
+      "items": {
+        "type": "object",
+        "required": ["description"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": ["VAGUE_DESCRIPTION", "SHALLOW_DEPTH", "OUTDATED_TECH", "LACK_EVIDENCE"]
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
     },
     "suggestedTopics": {
       "type": "array",
-      "description": "建议面试主题"
+      "description": "建议面试主题",
+      "items": {
+        "type": "string"
+      }
     },
     "stageTargets": {
       "type": "object",
-      "description": "阶段覆盖目标"
+      "description": "阶段覆盖目标",
+      "properties": {
+        "basic": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scenario": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "modelName": {
+      "type": "string",
+      "description": "生成该分析结果使用的模型名称"
+    },
+    "modelVersion": {
+      "type": "string",
+      "description": "模型版本或配置版本"
     },
     "errorMessage": {
       "type": "string",
       "description": "分析失败原因，success=false 时必需"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "success": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "skillTags"
+        ],
+        "properties": {
+          "skillTags": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "success": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "errorMessage"
+        ]
+      }
+    }
+  ]
 }

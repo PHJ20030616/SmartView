@@ -1,8 +1,10 @@
 import { request } from "../../api/request";
 import type {
+  ProfileAnalysisStatus,
   ResumeFile,
   ResumeProfile,
   ResumeVectorizationStatus,
+  RoleDirection,
   UpdateResumeProfileRequest,
 } from "./resumeTypes";
 
@@ -148,5 +150,61 @@ export async function retryResumeVectorizationApi(
   return extractData(
     response.data,
     `/resume-profiles/${profileId}/vectorization/retry`,
+  );
+}
+
+/**
+ * 触发或获取方向画像分析（幂等）
+ * POST /api/profile-analyses
+ */
+export async function startProfileAnalysisApi(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  const response = await request.post<ApiResponseWrapper<ProfileAnalysisStatus>>(
+    "/profile-analyses",
+    { profileId, roleDirection },
+    { signal },
+  );
+
+  return extractData(response.data, "/profile-analyses");
+}
+
+/**
+ * 查询画像分析状态（前端轮询用）
+ * GET /api/profile-analyses/{profileId}?roleDirection=
+ */
+export async function getProfileAnalysisStatusApi(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  const response = await request.get<ApiResponseWrapper<ProfileAnalysisStatus>>(
+    `/profile-analyses/${profileId}`,
+    { params: { roleDirection }, signal },
+  );
+
+  return extractData(response.data, `/profile-analyses/${profileId}`);
+}
+
+/**
+ * 重试方向画像分析
+ * POST /api/profile-analyses/{profileId}/retry?roleDirection=
+ */
+export async function retryProfileAnalysisApi(
+  profileId: string,
+  roleDirection: RoleDirection,
+  signal?: AbortSignal,
+): Promise<ProfileAnalysisStatus> {
+  const response = await request.post<ApiResponseWrapper<ProfileAnalysisStatus>>(
+    `/profile-analyses/${profileId}/retry`,
+    undefined,
+    { params: { roleDirection }, signal },
+  );
+
+  return extractData(
+    response.data,
+    `/profile-analyses/${profileId}/retry`,
   );
 }

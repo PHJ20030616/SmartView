@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.workers import resume_vectorize_worker
+from app.schemas.profile import ProfileAnalysis
+from app.workers import profile_worker
 
 
 class FakeIncomingMessage:
-    """测试向量 worker 的 ACK、拒绝和发布行为，不连接真实 RabbitMQ。"""
+    """测试画像分析 worker 的 ACK、拒绝和发布行为，不连接真实 RabbitMQ。"""
 
     def __init__(self, payload: dict) -> None:
         self.body = json.dumps(payload).encode("utf-8")
@@ -26,16 +27,18 @@ class FakeIncomingMessage:
         self.nacked = requeue
 
 
-def _task_payload(retry_count: int = 0) -> dict:
+def _task_payload(retry_count: int = 0, vectorize_completed: bool = True) -> dict:
     return {
-        "taskId": "00000000-0000-0000-0000-000000000204",
-        "traceId": "00000000-0000-0000-0000-000000000024",
-        "messageType": "RESUME_VECTORIZE_TASK",
+        "taskId": "00000000-0000-0000-0000-000000000301",
+        "traceId": "00000000-0000-0000-0000-000000000031",
+        "messageType": "PROFILE_ANALYZE_TASK",
         "schemaVersion": "1.0.0",
         "retryCount": retry_count,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "resumeProfileId": "12",
+        "roleDirection": "JAVA_BACKEND",
         "profileVersion": 2,
+        "vectorizeCompleted": vectorize_completed,
     }
 
 
@@ -43,12 +46,25 @@ def _settings() -> Settings:
     return Settings(_env_file=None, rabbitmq_retry_delay_seconds=0.001)
 
 
-def test_successful_vectorize_message_is_published_and_acked(monkeypatch) -> None:
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "vectorize_resume_profile",
-        lambda profile_id, profile_version, settings=None: 6,
+def _analysis() -> ProfileAnalysis:
+    return ProfileAnalysis(
+        skillTags=[
+            {"skill": "Java", "level": "EXPERT", "source": "PROJECT"}
+        ],
+        suggestedTopics=["并发", "JVM"],
+        riskPoints=[{"category": "VAGUE_DESCRIPTION", "description": "项目描述空泛"}],
+        stageTargets={"basic": ["八股重点"], "project": ["项目追问"], "scenario": ["场景题"]},
+        # 生产环境由 profile_analyzer 回填生成模型信息
+        modelName="deepseek-v4-flash",
+        modelVersion="1.0.0",
     )
+
+
+def test_successful_analyze_message_is_published_and_acked(monkeypatch) -> None:
+    async def fake_analyze(profile_id, profile_version, role_direction, *, settings=None):
+        return _analysis()
+
+    monkeypatch.setattr(profile_worker, "analyze_profile", fake_analyze)
     message = FakeIncomingMessage(_task_payload())
     published: list[dict] = []
     task_published: list[dict] = []
@@ -60,7 +76,7 @@ def test_successful_vectorize_message_is_published_and_acked(monkeypatch) -> Non
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -69,38 +85,35 @@ def test_successful_vectorize_message_is_published_and_acked(monkeypatch) -> Non
     )
 
     assert message.acked is True
-    assert published[0]["messageType"] == "RESUME_VECTORIZE_RESULT"
+    assert published[0]["messageType"] == "PROFILE_ANALYZE_RESULT"
     assert published[0]["success"] is True
-    assert published[0]["chunksCount"] == 6
-    assert published[0]["operation"] == "UPSERT"
+    assert published[0]["skillTags"][0]["skill"] == "Java"
+    assert published[0]["roleDirection"] == "JAVA_BACKEND"
+    assert published[0]["profileVersion"] == 2
+    assert published[0]["modelName"] == "deepseek-v4-flash"
     assert task_published == []
 
 
-def test_delete_vectorize_message_cleans_profile_vectors(monkeypatch) -> None:
-    deleted: list[tuple[str, object]] = []
+def test_vectorize_not_completed_publishes_terminal_failure(monkeypatch) -> None:
+    called: list[tuple] = []
 
-    def fake_delete(profile_id, settings=None):
-        deleted.append((profile_id, settings))
+    async def fake_analyze(profile_id, profile_version, role_direction, *, settings=None):
+        called.append((profile_id, profile_version, role_direction))
+        return _analysis()
 
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "delete_resume_profile_vectors",
-        fake_delete,
-    )
-    payload = _task_payload()
-    payload["operation"] = "DELETE"
-    message = FakeIncomingMessage(payload)
+    monkeypatch.setattr(profile_worker, "analyze_profile", fake_analyze)
+    message = FakeIncomingMessage(_task_payload(vectorize_completed=False))
     published: list[dict] = []
     task_published: list[dict] = []
 
-    async def publish(result: dict) -> None:
-        published.append(result)
+    async def publish(payload: dict) -> None:
+        published.append(payload)
 
     async def publish_task(payload: dict) -> None:
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -109,22 +122,17 @@ def test_delete_vectorize_message_cleans_profile_vectors(monkeypatch) -> None:
     )
 
     assert message.acked is True
-    assert deleted and deleted[0][0] == "12"
-    assert published[0]["success"] is True
-    assert published[0]["operation"] == "DELETE"
-    assert published[0]["chunksCount"] == 0
+    assert called == []
+    assert published[0]["success"] is False
+    assert "向量尚未入库" in published[0]["errorMessage"]
     assert task_published == []
 
 
-def test_retryable_vectorize_error_republishes_task_to_task_queue(monkeypatch) -> None:
-    def fail_vectorize(profile_id, profile_version, settings=None):
-        raise AppError("Chroma 暂时不可用", code="VECTOR_STORE_UNAVAILABLE")
+def test_retryable_llm_error_republishes_task_to_task_queue(monkeypatch) -> None:
+    async def fail_analyze(profile_id, profile_version, role_direction, *, settings=None):
+        raise AppError("LLM 服务暂时不可用", code="LLM_REQUEST_FAILED")
 
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "vectorize_resume_profile",
-        fail_vectorize,
-    )
+    monkeypatch.setattr(profile_worker, "analyze_profile", fail_analyze)
     message = FakeIncomingMessage(_task_payload(retry_count=1))
     published: list[dict] = []
     task_published: list[dict] = []
@@ -136,7 +144,7 @@ def test_retryable_vectorize_error_republishes_task_to_task_queue(monkeypatch) -
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -147,19 +155,15 @@ def test_retryable_vectorize_error_republishes_task_to_task_queue(monkeypatch) -
     assert message.acked is True
     # 重试任务消息必须走任务队列发布回调，绝不能混入结果队列
     assert published == []
-    assert task_published[0]["messageType"] == "RESUME_VECTORIZE_TASK"
+    assert task_published[0]["messageType"] == "PROFILE_ANALYZE_TASK"
     assert task_published[0]["retryCount"] == 2
 
 
-def test_non_retryable_vectorize_error_publishes_terminal_failure(monkeypatch) -> None:
-    def fail_vectorize(profile_id, profile_version, settings=None):
-        raise AppError("画像尚未确认", code="RESUME_PROFILE_NOT_CONFIRMED")
+def test_non_retryable_error_publishes_terminal_failure(monkeypatch) -> None:
+    async def fail_analyze(profile_id, profile_version, role_direction, *, settings=None):
+        raise AppError("简历画像不存在或已删除", code="RESUME_PROFILE_NOT_FOUND")
 
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "vectorize_resume_profile",
-        fail_vectorize,
-    )
+    monkeypatch.setattr(profile_worker, "analyze_profile", fail_analyze)
     message = FakeIncomingMessage(_task_payload())
     published: list[dict] = []
     task_published: list[dict] = []
@@ -171,7 +175,7 @@ def test_non_retryable_vectorize_error_publishes_terminal_failure(monkeypatch) -
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -180,24 +184,20 @@ def test_non_retryable_vectorize_error_publishes_terminal_failure(monkeypatch) -
     )
 
     assert message.acked is True
-    assert published[0]["messageType"] == "RESUME_VECTORIZE_RESULT"
+    assert published[0]["messageType"] == "PROFILE_ANALYZE_RESULT"
     assert published[0]["success"] is False
-    assert published[0]["operation"] == "UPSERT"
-    assert published[0]["retryCount"] == 3
+    # 确定性失败如实回传 task.retryCount（未经重试为 0），不伪造为最大重试次数
+    assert published[0]["retryCount"] == 0
     assert task_published == []
 
 
 def test_unexpected_exception_republishes_task_to_task_queue(monkeypatch) -> None:
-    """未预期异常（如 MySQL/Chroma 网络故障）同样走有界重试，且必须回任务队列。"""
+    """未预期异常（如 MySQL/网络故障）同样走有界重试，且必须回任务队列。"""
 
-    def crash(profile_id, profile_version, settings=None):
-        raise RuntimeError("Chroma 连接中断")
+    async def crash(profile_id, profile_version, role_direction, *, settings=None):
+        raise RuntimeError("MySQL 连接中断")
 
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "vectorize_resume_profile",
-        crash,
-    )
+    monkeypatch.setattr(profile_worker, "analyze_profile", crash)
     message = FakeIncomingMessage(_task_payload(retry_count=0))
     published: list[dict] = []
     task_published: list[dict] = []
@@ -209,7 +209,7 @@ def test_unexpected_exception_republishes_task_to_task_queue(monkeypatch) -> Non
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -219,21 +219,17 @@ def test_unexpected_exception_republishes_task_to_task_queue(monkeypatch) -> Non
 
     assert message.acked is True
     assert published == []
-    assert task_published[0]["messageType"] == "RESUME_VECTORIZE_TASK"
+    assert task_published[0]["messageType"] == "PROFILE_ANALYZE_TASK"
     assert task_published[0]["retryCount"] == 1
 
 
-def test_retry_exhausted_vectorize_publishes_terminal_failure(monkeypatch) -> None:
+def test_retry_exhausted_publishes_terminal_failure(monkeypatch) -> None:
     """retryCount 达到上限后必须回传终态失败，不能再发布重试消息。"""
 
-    def fail_vectorize(profile_id, profile_version, settings=None):
-        raise AppError("Chroma 暂时不可用", code="VECTOR_STORE_UNAVAILABLE")
+    async def fail_analyze(profile_id, profile_version, role_direction, *, settings=None):
+        raise AppError("LLM 服务暂时不可用", code="LLM_REQUEST_FAILED")
 
-    monkeypatch.setattr(
-        resume_vectorize_worker,
-        "vectorize_resume_profile",
-        fail_vectorize,
-    )
+    monkeypatch.setattr(profile_worker, "analyze_profile", fail_analyze)
     # rabbitmq_task_max_retries 默认 3，retryCount=3 表示已用尽
     message = FakeIncomingMessage(_task_payload(retry_count=3))
     published: list[dict] = []
@@ -246,7 +242,7 @@ def test_retry_exhausted_vectorize_publishes_terminal_failure(monkeypatch) -> No
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),
@@ -255,13 +251,13 @@ def test_retry_exhausted_vectorize_publishes_terminal_failure(monkeypatch) -> No
     )
 
     assert message.acked is True
-    assert published[0]["messageType"] == "RESUME_VECTORIZE_RESULT"
+    assert published[0]["messageType"] == "PROFILE_ANALYZE_RESULT"
     assert published[0]["success"] is False
     assert published[0]["retryCount"] == 3
     assert task_published == []
 
 
-def test_invalid_vectorize_message_is_rejected_without_requeue() -> None:
+def test_invalid_analyze_message_is_rejected_without_requeue() -> None:
     message = FakeIncomingMessage({"messageType": "INVALID"})
     published: list[dict] = []
     task_published: list[dict] = []
@@ -273,7 +269,7 @@ def test_invalid_vectorize_message_is_rejected_without_requeue() -> None:
         task_published.append(payload)
 
     asyncio.run(
-        resume_vectorize_worker.handle_resume_vectorize_message(
+        profile_worker.handle_profile_analyze_message(
             message,
             publish,
             _settings(),

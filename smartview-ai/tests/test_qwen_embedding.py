@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from app.clients.chroma_client import get_or_create_collection
 from app.clients.qwen_embedding import QwenEmbeddingFunction
 from app.core.config import Settings
@@ -88,8 +90,14 @@ def test_embedding_batches_preserves_order_and_auth(monkeypatch) -> None:
     assert [len(request["json"]["input"]) for request in client.requests] == [8, 2]
     # 鉴权头使用 Bearer + 密钥
     assert client.requests[0]["headers"]["Authorization"] == "Bearer test-key"
-    # 每个输出向量必须与其输入文本一一对应（验证顺序保持）
-    assert all(vectors[i] == _fake_embedding(texts[i]) for i in range(10))
+    # 每个输出向量必须与其输入文本一一对应（验证顺序保持）；float64→float32
+    # 转换存在极小舍入误差，用 allclose 近似比较而非精确相等
+    assert all(
+        np.allclose(vectors[i], _fake_embedding(texts[i]), atol=1e-6) for i in range(10)
+    )
+    # Chroma HTTP 模式的 query 会对向量调用 numpy 的 .tolist()，必须返回 ndarray
+    assert all(isinstance(vector, np.ndarray) for vector in vectors)
+    assert all(vector.dtype == np.float32 for vector in vectors)
 
 
 def test_embedding_empty_input_returns_empty() -> None:

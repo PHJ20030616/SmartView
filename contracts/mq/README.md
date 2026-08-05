@@ -49,8 +49,8 @@
 | RESUME_PARSE_RESULT | smartview.resume.parse.result.v1 | 简历解析结果 |
 | RESUME_VECTORIZE_TASK | smartview.resume.vectorize.task | 简历向量化任务 |
 | RESUME_VECTORIZE_RESULT | smartview.resume.vectorize.result | 简历向量化结果 |
-| PROFILE_ANALYZE_TASK | smartview.profile.analyze.task | 画像分析任务 |
-| PROFILE_ANALYZE_RESULT | smartview.profile.analyze.result | 画像分析结果 |
+| PROFILE_ANALYZE_TASK | smartview.profile.analyze.v1 | 画像分析任务 |
+| PROFILE_ANALYZE_RESULT | smartview.profile.analyze.result.v1 | 画像分析结果 |
 | REPORT_GENERATE_TASK | smartview.report.generate.task | 报告生成任务 |
 | REPORT_GENERATE_RESULT | smartview.report.generate.result | 报告生成结果 |
 

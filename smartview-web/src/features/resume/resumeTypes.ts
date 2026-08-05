@@ -11,6 +11,16 @@ export type UpdateResumeProfileRequest =
   components["schemas"]["UpdateResumeProfileRequest"];
 export type ResumeVectorizationStatus =
   components["schemas"]["ResumeVectorizationStatus"];
+export type ProfileAnalysisStatus =
+  components["schemas"]["ProfileAnalysisStatus"];
+export type StartProfileAnalysisRequest =
+  components["schemas"]["StartProfileAnalysisRequest"];
+
+/** 面试方向 */
+export type RoleDirection = ProfileAnalysisStatus["roleDirection"];
+
+/** 画像分析任务状态 */
+export type ProfileAnalysisTaskStatus = ProfileAnalysisStatus["status"];
 
 /** 解析状态 */
 export type ParseStatus = ResumeFile["parseStatus"];

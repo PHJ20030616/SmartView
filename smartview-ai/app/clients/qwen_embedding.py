@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 import httpx
+import numpy as np
 
 from app.core.config import Settings, get_settings
 
@@ -78,8 +79,14 @@ class QwenEmbeddingFunction:
         """支持的距离空间列表，供 Chroma 校验 collection 元数据。"""
         return ["cosine"]
 
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        """把一批文本转为向量；分批请求并保持顺序，返回与输入等长的向量列表。"""
+    def __call__(self, input: list[str]) -> list[np.ndarray]:
+        """把一批文本转为向量；分批请求并保持顺序，返回与输入等长的向量列表。
+
+        必须返回 numpy 一维数组：Chroma 的 query/add 内部会对每个向量调用
+        ``convert_np_embeddings_to_list``（执行 ``embedding.tolist()``），若返回
+        纯 Python list 会在检索时抛 ``AttributeError: 'list' object has no attribute 'tolist'``，
+        导致简历/知识检索全部降级失败。
+        """
         if not input:
             return []
         if not self._api_key:
@@ -92,9 +99,9 @@ class QwenEmbeddingFunction:
             for start in range(0, len(input), _BATCH_SIZE):
                 batch = input[start : start + _BATCH_SIZE]
                 embeddings.extend(self._embed_batch(client, batch))
-        return embeddings
+        return [np.asarray(vector, dtype=np.float32) for vector in embeddings]
 
-    def embed_query(self, input: list[str]) -> list[list[float]]:
+    def embed_query(self, input: list[str]) -> list[np.ndarray]:
         """查询文本入口：Qwen 向量模型对文档与查询用同一编码，直接复用 __call__。"""
         return self.__call__(input)
 
