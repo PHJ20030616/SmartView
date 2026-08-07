@@ -52,6 +52,9 @@ public class AiInterviewClient {
     /** 首题生成接口路径，与 ai-api 契约一致 */
     private static final String FIRST_QUESTION_PATH = "/api/v1/interview/first-question";
 
+    /** 候选池生成接口路径，与 ai-api 契约一致 */
+    private static final String CANDIDATE_POOL_PATH = "/api/v1/interview/candidate-pool";
+
     private final RestTemplate restTemplate;
     private final AiServiceProperties properties;
     private final ObjectMapper objectMapper;
@@ -124,6 +127,50 @@ public class AiInterviewClient {
                     sessionId, exception.getMessage(), exception);
             throw new BusinessException(
                     ResponseCode.INTERNAL_ERROR, "AI 服务暂不可用，首题生成失败，请稍后重试");
+        }
+    }
+
+    /**
+     * 调用 FastAPI 生成候选问题池。
+     *
+     * 候选池是尽力而为的缓存：调用失败抛 BusinessException 由调用方决定降级策略
+     * （预生成异步路径捕获后仅记日志；同步重建路径捕获后返回空池）。
+     *
+     * @param request 候选池生成请求（poolType 区分预生成/追问）
+     * @return FastAPI 返回的候选池结果
+     */
+    public AiGenerateCandidatePoolResponse generateCandidatePool(AiGenerateCandidatePoolRequest request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set(X_API_KEY_HEADER, properties.getApiKey());
+        headers.set(TraceIdContext.TRACE_ID_HEADER, request.getTraceId());
+
+        String url = properties.getBaseUrl().replaceAll("/+$", "") + CANDIDATE_POOL_PATH;
+        try {
+            log.info("调用 FastAPI 生成候选池，sessionId={}, questionId={}, poolType={}",
+                    request.getSessionId(), request.getQuestionId(), request.getPoolType());
+            ResponseEntity<AiGenerateCandidatePoolResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    new HttpEntity<>(request, headers),
+                    AiGenerateCandidatePoolResponse.class);
+            AiGenerateCandidatePoolResponse body = response.getBody();
+            if (body == null) {
+                throw new BusinessException(ResponseCode.INTERNAL_ERROR, "AI 服务返回空响应，候选池生成失败");
+            }
+            return body;
+        } catch (RestClientException exception) {
+            if (exception instanceof HttpStatusCodeException statusException
+                    && HttpStatus.UNAUTHORIZED.value() == statusException.getStatusCode().value()) {
+                log.error("AI 服务鉴权失败（401），请检查 AI_SERVICE_API_KEY 配置，sessionId={}",
+                        request.getSessionId());
+                throw new BusinessException(
+                        ResponseCode.INTERNAL_ERROR, "AI 服务鉴权配置错误，请联系管理员");
+            }
+            log.error("AI 服务候选池生成调用失败，sessionId={}, error={}",
+                    request.getSessionId(), exception.getMessage(), exception);
+            throw new BusinessException(
+                    ResponseCode.INTERNAL_ERROR, "AI 服务暂不可用，候选池生成失败，请稍后重试");
         }
     }
 

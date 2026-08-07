@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.smartview.common.api.ResponseCode;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.properties.AiServiceProperties;
+import com.smartview.interview.model.CandidatePoolItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +20,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -133,5 +136,83 @@ class AiInterviewClientTest {
         // 解析失败时透传空对象，而非整体调用失败
         assertThat(body.getStagePlan()).isInstanceOf(ObjectNode.class);
         assertThat(body.getStagePlan().toString()).isEqualTo("{}");
+    }
+
+    @Test
+    void generateCandidatePool_成功解析候选列表并透传头() {
+        AiGenerateCandidatePoolResponse body = new AiGenerateCandidatePoolResponse();
+        body.setSuccess(true);
+        // 响应直接复用候选模型 CandidatePoolItem（与 Redis 存储共用同一结构）
+        CandidatePoolItem candidate = CandidatePoolItem.builder()
+                .questionText("请解释 volatile 语义。")
+                .topic("Java 并发")
+                .stage("BASIC")
+                .candidateType("SAME_STAGE_SWITCH")
+                .build();
+        body.setCandidates(List.of(candidate));
+
+        when(restTemplate.exchange(
+                eq("http://localhost:8000/api/v1/interview/candidate-pool"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(AiGenerateCandidatePoolResponse.class)))
+                .thenReturn(ResponseEntity.ok(body));
+
+        AiGenerateCandidatePoolRequest request = new AiGenerateCandidatePoolRequest();
+        request.setSessionId("1");
+        request.setQuestionId("11");
+        request.setRoleDirection("JAVA_BACKEND");
+        request.setPoolType("PRE_GENERATED");
+        request.setCurrentStage("BASIC");
+        request.setTraceId("trace-123");
+
+        AiGenerateCandidatePoolResponse result = client.generateCandidatePool(request);
+
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getCandidates()).hasSize(1);
+        assertThat(result.getCandidates().get(0).getTopic()).isEqualTo("Java 并发");
+
+        ArgumentCaptor<HttpEntity<?>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(
+                anyString(), eq(HttpMethod.POST), entityCaptor.capture(),
+                eq(AiGenerateCandidatePoolResponse.class));
+        HttpHeaders headers = entityCaptor.getValue().getHeaders();
+        assertThat(headers.getFirst("X-API-Key")).isEqualTo("secret-key");
+        assertThat(headers.getFirst("X-Trace-Id")).isEqualTo("trace-123");
+        AiGenerateCandidatePoolRequest sent = (AiGenerateCandidatePoolRequest) entityCaptor.getValue().getBody();
+        assertThat(sent.getPoolType()).isEqualTo("PRE_GENERATED");
+    }
+
+    @Test
+    void generateCandidatePool_连接超时映射为AI服务暂不可用() {
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(),
+                eq(AiGenerateCandidatePoolResponse.class)))
+                .thenThrow(new ResourceAccessException("Read timed out"));
+
+        assertThatThrownBy(() -> client.generateCandidatePool(request()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("AI 服务暂不可用");
+    }
+
+    @Test
+    void generateCandidatePool_空响应体报错() {
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(),
+                eq(AiGenerateCandidatePoolResponse.class)))
+                .thenReturn(ResponseEntity.ok(null));
+
+        assertThatThrownBy(() -> client.generateCandidatePool(request()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("空响应");
+    }
+
+    private AiGenerateCandidatePoolRequest request() {
+        AiGenerateCandidatePoolRequest request = new AiGenerateCandidatePoolRequest();
+        request.setSessionId("1");
+        request.setQuestionId("11");
+        request.setRoleDirection("JAVA_BACKEND");
+        request.setPoolType("PRE_GENERATED");
+        request.setCurrentStage("BASIC");
+        request.setTraceId("trace-123");
+        return request;
     }
 }
