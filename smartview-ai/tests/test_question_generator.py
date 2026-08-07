@@ -132,6 +132,26 @@ def test_single_target_llm_failure_is_degraded(monkeypatch) -> None:
     assert result == []
 
 
+def test_failed_target_does_not_block_successful_target(monkeypatch) -> None:
+    call_count = 0
+
+    async def flaky(messages, settings, *, what="候选题", repair_error=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise AppError("AI 生成服务暂时不可用", code="LLM_REQUEST_FAILED")
+        return _llm_payload()
+
+    monkeypatch.setattr(qg, "call_deepseek_json", flaky)
+
+    # 两个目标：第一个 LLM 失败被降级丢弃，第二个成功保留 → 不阻断整体
+    state = _state(generation_targets=[_PRE_TARGET, _PRE_TARGET])
+    result = _run(monkeypatch, state)
+
+    assert len(result) == 1
+    assert result[0]["topic"] == "Java 并发"
+
+
 def _run(monkeypatch, state: dict) -> list:
     """执行 generate_questions 节点并返回 raw_candidates。
 
