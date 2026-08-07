@@ -95,3 +95,10 @@ smartview:
       retry-base-delay-ms: ${RESUME_MQ_RETRY_BASE_DELAY_MS:100}
       scheduled-retry-interval-minutes: ${RESUME_MQ_SCHEDULED_RETRY_INTERVAL_MINUTES:5}
       max-scheduled-retry-count: ${RESUME_MQ_MAX_SCHEDULED_RETRY_COUNT:3}
+  ai-service:
+    # FastAPI AI 服务同步调用配置（首题生成等需要同步返回的轻量接口）
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
+    # 跨服务鉴权密钥，与 smartview-ai 的 AI_SERVICE_API_KEY 保持一致
+    api-key: ${AI_SERVICE_API_KEY:}
+    connect-timeout-ms: ${AI_SERVICE_CONNECT_TIMEOUT_MS:3000}
+    read-timeout-ms: ${AI_SERVICE_READ_TIMEOUT_MS:60000}

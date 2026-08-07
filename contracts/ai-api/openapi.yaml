@@ -661,6 +661,7 @@ components:
       type: object
       required:
         - sessionId
+        - roleDirection
         - stagePlan
         - resumeProfileId
         - profileVersion
@@ -669,9 +670,18 @@ components:
         sessionId:
           type: string
           description: 面试会话 ID
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向，用于知识库/面经检索过滤与出题上下文
         stagePlan:
           type: object
-          description: 阶段计划
+          description: >
+            阶段计划，由 Spring 端从画像分析确定性生成后原样透传（不透明 payload）。
+            字段格式见 docs/interview-policy.md 2.2：
+            {policy_version, total_min_questions, total_max_questions,
+            stages: [{stage, min_questions, max_questions, required_topics, max_follow_up_depth, switch_conditions}]}。
+            FastAPI 只需读取 BASIC 阶段的 required_topics 等用于出题上下文。
         resumeProfileId:
           type: string
           description: 简历画像 ID
@@ -694,6 +704,10 @@ components:
         questionText:
           type: string
           description: 问题正文
+        topic:
+          type: string
+          description: 问题主题，例如某个技术点、某个简历项目、某类业务场景，
+            用于回写 interview_question.topic
         questionType:
           type: string
           enum: [OPENING, FOLLOW_UP, SWITCH_TOPIC, STAGE_ENTRY]

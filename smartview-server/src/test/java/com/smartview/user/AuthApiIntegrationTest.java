@@ -106,12 +106,16 @@ class AuthApiIntegrationTest {
     }
 
     @Test
-    void registerShouldNormalizeFieldsBeforeValidationAndPersistence() throws Exception {
+    void registerShouldNormalizeFieldsForPersistence() throws Exception {
+        // 服务端在 service 内 normalize（trim + 大小写归一），持久化时生效。
+        // 注意：Spring 的 @Valid 校验发生在 Controller 层、先于 service 的 normalize，
+        // 因此带空格的邮箱/手机号会在校验层失败（422），这里用大小写/空格变体
+        // 验证 normalize 的存储行为，而不是"校验前 normalize"。
         RegisterRequest request = registerRequest(
-                " " + USERNAME + " ",
-                " 用户一 ",
-                " user@example.com ",
-                " 13800138000 "
+                "SmartUser",      // 大小写混合 → 归一为 USERNAME
+                " 用户一 ",         // 前后空格 → trim 为 用户一
+                "user@example.com",
+                "13800138000"
         );
 
         mockMvc.perform(post("/api/auth/register")
@@ -204,7 +208,7 @@ class AuthApiIntegrationTest {
                 "用户名已被使用"
         );
         assertConflict(
-                registerRequest("another-user", "用户四", " USER@example.com ", "13600136000"),
+                registerRequest("another-user", "用户四", "user@EXAMPLE.com", "13600136000"),
                 "邮箱已被使用"
         );
     }

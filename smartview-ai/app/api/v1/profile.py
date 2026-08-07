@@ -1,43 +1,18 @@
 """画像分析 API。"""
 
-from hmac import compare_digest
-from typing import Annotated
+import logging
 
-from fastapi import APIRouter, Depends, Security
-from fastapi.security import APIKeyHeader
+from fastapi import APIRouter, Depends
 
-from app.core.config import Settings, get_settings
+from app.api.v1.deps import require_ai_service_api_key
 from app.core.errors import AppError, ErrorResponse
 from app.core.trace import reset_trace_id, set_trace_id
 from app.schemas.profile import AnalyzeProfileRequest, AnalyzeProfileResponse
 from app.services.profile_analyzer import analyze_profile_latest
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/profile", tags=["画像分析"])
-api_key_header = APIKeyHeader(
-    name="X-API-Key",
-    description="固定 API Key 认证",
-    auto_error=False,
-)
-
-
-async def require_ai_service_api_key(
-    api_key: Annotated[str | None, Security(api_key_header)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> None:
-    """校验 Spring Boot 到 AI 服务的固定密钥，避免画像分析接口被匿名调用。"""
-    expected_key = settings.ai_service_api_key.get_secret_value().strip()
-    if not expected_key:
-        raise AppError(
-            "AI 服务未配置接口鉴权密钥，请检查 AI_SERVICE_API_KEY",
-            code="AI_AUTH_CONFIG_MISSING",
-            status_code=500,
-        )
-    if not api_key or not compare_digest(api_key, expected_key):
-        raise AppError(
-            "接口鉴权失败，请提供有效的 X-API-Key",
-            code="AUTHENTICATION_FAILED",
-            status_code=401,
-        )
 
 
 @router.post(
@@ -77,9 +52,7 @@ async def analyze_profile_endpoint(
         # 对外隐藏底层堆栈，返回统一可读失败响应。
         return AnalyzeProfileResponse(success=False, errorMessage=exc.message)
     except Exception:  # noqa: BLE001 - 对外隐藏内部堆栈，保留统一可读错误
-        import logging
-
-        logging.getLogger(__name__).exception(
+        log.exception(
             "画像分析 HTTP 端点异常 profileId=%s direction=%s",
             request.resumeProfileId,
             request.roleDirection,

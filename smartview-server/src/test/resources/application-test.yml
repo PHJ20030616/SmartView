@@ -1,10 +1,23 @@
+# =====================================================
+# 集成测试专用配置（@SpringBootTest / activeProfiles=test）
+#
+# 运行前提：需要本地基础设施就绪——
+# - MySQL：测试库 smartview_test（Flyway 自动建表，库需存在）
+# - MinIO：本地对象存储（端口 9000）
+# - 凭据来自 smartview-infra/.env（被 .gitignore 忽略），运行前先加载：
+#     set -a; source smartview-infra/.env; set +a; mvn test
+#   MySQL 默认值 root/123456 与 .env 一致，可直连；MinIO 密码与 .env 绑定，
+#   未加载 .env 时 MinIO 认证会失败。
+# =====================================================
 spring:
   datasource:
-    driver-class-name: org.h2.Driver
-    # 使用 MySQL 兼容模式运行生产 Flyway 脚本，避免测试表结构与真实环境产生偏差。
-    url: jdbc:h2:mem:smartview_test;MODE=MySQL;NON_KEYWORDS=USER;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
-    username: sa
-    password:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 使用独立测试库 smartview_test，避免集成测试污染开发库 smartview。
+    # 不使用 H2：V1/V2 迁移采用跨表重复的短索引名（如 idx_user_id），H2 的索引名是
+    # schema 级全局唯一，会迁移失败；MySQL 索引名表级唯一可正常应用（V3 已为此重命名）。
+    url: jdbc:mysql://localhost:3306/smartview_test?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:123456}
   flyway:
     enabled: true
     baseline-on-migrate: true
