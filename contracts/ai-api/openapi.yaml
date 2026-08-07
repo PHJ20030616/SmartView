@@ -221,6 +221,34 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/interview/candidate-pool:
+    post:
+      tags:
+        - 面试流程
+      summary: 生成候选问题池
+      description: 按 poolType 生成预生成候选池（同阶段换题+下一阶段入口）或追问候选池（基于回答评估事实）。
+        候选池仅提供备选问题，不决定下一步；最终动作由 Spring Boot 的 StagePolicyEngine 决定。
+      operationId: generateCandidatePool
+      security:
+        - APIKeyHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateCandidatePoolRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateCandidatePoolResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /api/v1/interview/report:
     post:
       tags:
@@ -842,6 +870,144 @@ components:
         errorMessage:
           type: string
           description: 评估失败原因
+
+    GenerateCandidatePoolRequest:
+      type: object
+      required:
+        - sessionId
+        - questionId
+        - roleDirection
+        - poolType
+        - stagePlan
+        - traceId
+      properties:
+        sessionId:
+          type: string
+          description: 面试会话 ID
+        questionId:
+          type: string
+          description: 当前问题 ID，候选池归属的题目
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
+        poolType:
+          type: string
+          enum: [PRE_GENERATED, FOLLOW_UP]
+          description: 候选池类型：提问后预生成 / 回答后追问
+        currentStage:
+          type: string
+          enum: [BASIC, PROJECT, SCENARIO]
+          description: 当前阶段
+        stagePlan:
+          type: object
+          description: 阶段计划（不透明 payload，Spring 端生成后原样透传，结构见 docs/interview-policy.md 2.2）
+        stageCoverage:
+          type: object
+          description: 阶段覆盖度（不透明 payload，Spring 端维护，结构见 docs/interview-policy.md 2.3）
+        sessionContext:
+          type: object
+          properties:
+            currentTopic:
+              type: string
+            questionCount:
+              type: integer
+        evaluationFacts:
+          type: object
+          description: 回答评估事实，仅 FOLLOW_UP 池需要
+          properties:
+            score:
+              type: integer
+              minimum: 0
+              maximum: 100
+            level:
+              type: string
+              enum: [GOOD, NORMAL, WEAK]
+            matchedPoints:
+              type: array
+              items:
+                type: string
+            missingPoints:
+              type: array
+              items:
+                type: string
+            riskPoints:
+              type: array
+              items:
+                type: object
+                properties:
+                  category:
+                    type: string
+                  description:
+                    type: string
+            answerText:
+              type: string
+            questionText:
+              type: string
+        historyTopics:
+          type: array
+          description: 最近已问主题，用于生成时避免重复
+          items:
+            type: string
+        traceId:
+          type: string
+          format: uuid
+          description: 链路追踪 ID
+
+    CandidatePoolItem:
+      type: object
+      required:
+        - questionText
+        - topic
+        - stage
+        - candidateType
+      properties:
+        questionText:
+          type: string
+          description: 候选问题正文
+        topic:
+          type: string
+          description: 问题主题
+        stage:
+          type: string
+          enum: [BASIC, PROJECT, SCENARIO]
+          description: 所属阶段
+        candidateType:
+          type: string
+          enum: [SAME_STAGE_SWITCH, NEXT_STAGE_ENTRY, FOLLOW_UP]
+          description: 候选类型：同阶段换题 / 下一阶段入口 / 追问
+        sourceType:
+          type: string
+          enum: [KNOWLEDGE_BASE, EXPERIENCE_CASE, RESUME_PROJECT, MIXED]
+          description: 来源类型
+        expectedPoints:
+          type: array
+          description: 期望回答要点
+          items:
+            type: string
+        targetPoint:
+          type: string
+          description: 目标考察点
+        reason:
+          type: string
+          description: 生成原因（追问时说明依据，如缺失要点/风险点）
+
+    GenerateCandidatePoolResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: 生成是否成功
+        candidates:
+          type: array
+          description: 候选问题数组（0-4 道）
+          items:
+            $ref: '#/components/schemas/CandidatePoolItem'
+        errorMessage:
+          type: string
+          description: 生成失败原因
 
     GenerateReportRequest:
       type: object
