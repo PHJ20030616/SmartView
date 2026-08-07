@@ -25,13 +25,6 @@ _MAX_SAME_STAGE_SWITCH = 2
 _MAX_NEXT_STAGE_ENTRY = 2
 _MAX_FOLLOW_UP = 2
 
-# 按阶段推断来源类型：候选池不做逐候选检索，来源由目标阶段推断
-_STAGE_SOURCE = {
-    "BASIC": "KNOWLEDGE_BASE",
-    "PROJECT": "RESUME_PROJECT",
-    "SCENARIO": "EXPERIENCE_CASE",
-}
-
 
 def compute_generation_targets(state: dict[str, Any]) -> dict[str, Any]:
     """根据 poolType 计算候选池生成目标，写回 state 的 generation_targets 键。

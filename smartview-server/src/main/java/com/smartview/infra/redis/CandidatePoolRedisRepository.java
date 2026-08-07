@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.interview.model.CandidatePoolItem;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -25,6 +26,9 @@ import java.util.List;
  * 容错说明：
  * - 序列化/反序列化失败只记日志返回 null，由调用方走重建链路，
  *   不影响主流程（候选池缺失可降级）
+ * - Redis 连接异常（RedisConnectionFailureException 等 DataAccessException）
+ *   同样按可降级路径处理（interview-policy.md 3.5）：读取视为缺失走重建，
+ *   写入尽力而为跳过，与 JSON 序列化失败行为保持一致
  *
  * @author SmartView Team
  * @since 2026-08-07
@@ -56,14 +60,24 @@ public class CandidatePoolRedisRepository {
         } catch (JsonProcessingException exception) {
             // 序列化失败不阻断调用方：候选池是可降级的缓存
             log.warn("候选池序列化失败，跳过写入，key={}, error={}", key, exception.getMessage());
+        } catch (DataAccessException exception) {
+            // Redis 连接异常按可降级路径处理（interview-policy.md 3.5）：缓存写入尽力而为，失败不阻断调用方
+            log.warn("候选池写入 Redis 失败（连接异常），跳过写入，key={}, error={}", key, exception.getMessage());
         }
     }
 
     /**
-     * 读取候选池；缺失或 JSON 非法返回 null，由调用方走重建链路。
+     * 读取候选池；缺失、JSON 非法或 Redis 连接异常返回 null，由调用方走重建链路。
      */
     public List<CandidatePoolItem> read(String key) {
-        String json = redisTemplate.opsForValue().get(key);
+        String json;
+        try {
+            json = redisTemplate.opsForValue().get(key);
+        } catch (DataAccessException exception) {
+            // Redis 连接异常按可降级路径处理（interview-policy.md 3.5）：视为缺失走重建链路
+            log.warn("候选池读取 Redis 失败（连接异常），视为缺失走重建，key={}, error={}", key, exception.getMessage());
+            return null;
+        }
         if (json == null || json.isBlank()) {
             return null;
         }

@@ -98,6 +98,11 @@ def _normalize(
     reason = str(payload.get("reason") or "").strip()
     if not reason and target.get("candidateType") == "FOLLOW_UP":
         reason = _default_reason(target)
+    raw_points = payload.get("expectedPoints")
+    if isinstance(raw_points, str):
+        # 模型偶发把数组返回成字符串：包裹为单元素列表，避免逐字符拆分
+        raw_points = [raw_points]
+    points = raw_points if isinstance(raw_points, list) else []
     return {
         "questionText": str(payload.get("questionText") or "").strip(),
         "topic": topic,
@@ -105,7 +110,7 @@ def _normalize(
         "candidateType": target.get("candidateType"),
         "sourceType": source,
         "expectedPoints": [
-            str(point) for point in (payload.get("expectedPoints") or []) if str(point).strip()
+            str(point) for point in points if str(point).strip()
         ],
         "targetPoint": target_point or None,
         "reason": reason or None,

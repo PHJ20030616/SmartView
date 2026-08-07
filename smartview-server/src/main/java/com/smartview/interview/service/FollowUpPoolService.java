@@ -95,13 +95,16 @@ public class FollowUpPoolService {
             }
             AiGenerateCandidatePoolRequest request = buildRequest(session, questionId, "PRE_GENERATED", null);
             AiGenerateCandidatePoolResponse response = aiInterviewClient.generateCandidatePool(request);
-            if (Boolean.TRUE.equals(response.getSuccess())) {
+            // candidates=null 视为失败：避免向 Redis 写入 "null" 字面量（读取侧虽可自愈，但会污染缓存）
+            if (Boolean.TRUE.equals(response.getSuccess()) && response.getCandidates() != null) {
                 savePool(session, questionId, response.getCandidates());
                 log.info("候选池预生成完成并写入 Redis sessionId={} questionId={} count={}",
-                        sessionId, questionId, response.getCandidates() == null ? 0 : response.getCandidates().size());
+                        sessionId, questionId, response.getCandidates().size());
             } else {
-                log.warn("候选池预生成失败（业务失败）sessionId={} reason={}",
-                        sessionId, response.getErrorMessage());
+                log.warn("候选池预生成失败或无候选 sessionId={} questionId={} reason={}",
+                        sessionId, questionId,
+                        Boolean.TRUE.equals(response.getSuccess())
+                                ? "候选列表为空" : response.getErrorMessage());
             }
         } catch (BusinessException exception) {
             // AI 服务不可用/鉴权错误：候选池可降级，仅记录不抛出
