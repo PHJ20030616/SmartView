@@ -59,6 +59,8 @@ class InterviewSessionServiceTest {
     private ProfileAnalysisMapper profileAnalysisMapper;
     @Mock
     private AiInterviewClient aiInterviewClient;
+    @Mock
+    private FollowUpPoolService followUpPoolService;
 
     private InterviewSessionService service;
     private ObjectMapper objectMapper;
@@ -78,7 +80,8 @@ class InterviewSessionServiceTest {
                 new StagePlanBuilder(objectMapper),
                 aiInterviewClient,
                 new InterviewSessionDtoMapper(),
-                objectMapper);
+                objectMapper,
+                followUpPoolService);
     }
 
     private ResumeProfile confirmedProfile() {
@@ -237,6 +240,9 @@ class InterviewSessionServiceTest {
         assertThat(response.getExpectedMaxQuestions()).isEqualTo(20);
         assertThat(response.getStatus())
                 .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.IN_PROGRESS);
+
+        // 会话创建成功且首题落库后，异步触发候选池预生成
+        verify(followUpPoolService).preGenerateAsync(1L, 11L);
     }
 
     @Test

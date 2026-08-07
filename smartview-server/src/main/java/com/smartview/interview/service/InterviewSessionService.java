@@ -30,6 +30,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -68,6 +70,7 @@ public class InterviewSessionService {
     private final AiInterviewClient aiInterviewClient;
     private final InterviewSessionDtoMapper dtoMapper;
     private final ObjectMapper objectMapper;
+    private final FollowUpPoolService followUpPoolService;
 
     public InterviewSessionService(
             InterviewSessionMapper sessionMapper,
@@ -77,7 +80,8 @@ public class InterviewSessionService {
             StagePlanBuilder stagePlanBuilder,
             AiInterviewClient aiInterviewClient,
             InterviewSessionDtoMapper dtoMapper,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            FollowUpPoolService followUpPoolService) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
         this.resumeProfileMapper = resumeProfileMapper;
@@ -86,6 +90,7 @@ public class InterviewSessionService {
         this.aiInterviewClient = aiInterviewClient;
         this.dtoMapper = dtoMapper;
         this.objectMapper = objectMapper;
+        this.followUpPoolService = followUpPoolService;
     }
 
     /**
@@ -152,7 +157,31 @@ public class InterviewSessionService {
         session.setStartedAt(now);
         sessionMapper.updateById(session);
 
+        // 首题落库并更新会话后，事务提交时异步触发候选池预生成（跨 Bean 调用使 @Async 生效）。
+        // 候选池是尽力而为的缓存，生成失败不影响会话创建。
+        triggerPreGenerationAfterCommit(session.getId(), question.getId());
+
         return dtoMapper.toResponse(session, question);
+    }
+
+    /**
+     * 事务提交后触发候选池预生成；无活动事务时直接调用（兼容非事务调用方）。
+     *
+     * 必须等事务提交后再生成：预生成需读取已落库的会话阶段计划/覆盖度，
+     * 事务内提交前读取会看到旧数据。
+     */
+    private void triggerPreGenerationAfterCommit(Long sessionId, Long questionId) {
+        Runnable trigger = () -> followUpPoolService.preGenerateAsync(sessionId, questionId);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    trigger.run();
+                }
+            });
+        } else {
+            trigger.run();
+        }
     }
 
     /**
