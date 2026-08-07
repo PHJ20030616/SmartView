@@ -133,6 +133,25 @@ def test_follow_up_pool_capped_at_two(monkeypatch) -> None:
     assert all(c.candidateType == "FOLLOW_UP" for c in resp.candidates)
 
 
+def test_follow_up_no_targets_returns_success_with_empty_pool(monkeypatch) -> None:
+    _stub_llm(monkeypatch)
+    graph = CandidatePoolGraph(_settings)
+
+    resp = asyncio.run(
+        graph.generate(
+            _request(
+                poolType="FOLLOW_UP",
+                sessionContext={"currentTopic": "Java 并发"},
+                evaluationFacts={"score": 30},  # 得分 < 40：stage_controller 不产生目标
+            )
+        )
+    )
+
+    # 无生成目标不是失败：空池也返回 success=true，避免误判为 LLM 整体不可用
+    assert resp.success is True
+    assert resp.candidates == []
+
+
 def test_llm_error_returns_failure_response(monkeypatch) -> None:
     from app.core.errors import AppError
 
