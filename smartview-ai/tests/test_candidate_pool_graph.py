@@ -152,6 +152,30 @@ def test_follow_up_no_targets_returns_success_with_empty_pool(monkeypatch) -> No
     assert resp.candidates == []
 
 
+def test_follow_up_not_deduped_by_history_topic(monkeypatch):
+    """追问候选故意复用当前主题，不应被已问主题去重（Task 5.4 修复）。"""
+    _stub_llm(monkeypatch)
+    graph = CandidatePoolGraph(_settings)
+
+    resp = asyncio.run(
+        graph.generate(
+            _request(
+                poolType="FOLLOW_UP",
+                sessionContext={"currentTopic": "Java 并发"},
+                historyTopics=["Java 并发"],  # 当前主题已在已问主题中
+                evaluationFacts={
+                    "score": 60,
+                    "missingPoints": ["未说明 volatile 语义"],
+                },
+            )
+        )
+    )
+
+    assert resp.success is True
+    assert len(resp.candidates) >= 1
+    assert all(c.candidateType == "FOLLOW_UP" for c in resp.candidates)
+
+
 def test_llm_error_returns_failure_response(monkeypatch) -> None:
     from app.core.errors import AppError
 

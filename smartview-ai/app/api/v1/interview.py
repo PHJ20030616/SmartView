@@ -18,8 +18,11 @@ from app.api.v1.deps import require_ai_service_api_key
 from app.core.errors import ErrorResponse
 from app.core.trace import reset_trace_id, set_trace_id
 from app.graphs.candidate_pool_graph import CandidatePoolGraph
+from app.graphs.evaluate_answer_graph import EvaluateAnswerGraph
 from app.graphs.interview_graph import FirstQuestionGraph
 from app.schemas.interview import (
+    EvaluateAnswerRequest,
+    EvaluateAnswerResponse,
     GenerateCandidatePoolRequest,
     GenerateCandidatePoolResponse,
     GenerateFirstQuestionRequest,
@@ -39,6 +42,12 @@ def _get_graph() -> FirstQuestionGraph:
 def _get_candidate_pool_graph() -> CandidatePoolGraph:
     """缓存候选池生成图单例，避免每次请求重复编译 LangGraph。"""
     return CandidatePoolGraph()
+
+
+@lru_cache(maxsize=1)
+def _get_evaluate_graph() -> EvaluateAnswerGraph:
+    """缓存回答评估图单例，避免每次请求重复编译 LangGraph。"""
+    return EvaluateAnswerGraph()
 
 
 @router.post(
@@ -94,5 +103,31 @@ async def generate_candidate_pool(
     token = set_trace_id(str(request.traceId))
     try:
         return await _get_candidate_pool_graph().generate(request)
+    finally:
+        reset_trace_id(token)
+
+
+@router.post(
+    "/evaluate",
+    operation_id="evaluateAnswer",
+    response_model=EvaluateAnswerResponse,
+    response_description="评估成功。业务失败同样返回 200，通过 success=false 与 errorMessage 表达。",
+    summary="评估回答并生成追问候选",
+    dependencies=[Depends(require_ai_service_api_key)],
+    responses={
+        401: {"model": ErrorResponse, "description": "接口鉴权失败"},
+        422: {"model": ErrorResponse, "description": "请求参数校验失败"},
+        500: {"model": ErrorResponse, "description": "AI 服务鉴权配置缺失"},
+    },
+)
+async def evaluate_answer(request: EvaluateAnswerRequest) -> EvaluateAnswerResponse:
+    """评估回答并同步生成追问候选（Spring 提交回答时调用）。
+
+    只返回评估事实与追问候选池（0-2 道），不返回任何业务决策字段；
+    最终动作由 Spring StagePolicyEngine 决定。
+    """
+    token = set_trace_id(str(request.traceId))
+    try:
+        return await _get_evaluate_graph().evaluate(request)
     finally:
         reset_trace_id(token)
