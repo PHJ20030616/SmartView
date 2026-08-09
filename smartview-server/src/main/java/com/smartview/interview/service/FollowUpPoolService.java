@@ -209,6 +209,10 @@ public class FollowUpPoolService {
      *
      * 快照格式（与 5.4 StagePolicyEngine 写入约定）：顶层 candidates 数组，
      * 元素为 CandidatePoolItem；本类只读取 candidates，不消费决策元数据。
+     *
+     * 注意：快照来自上一题的决策，其 FOLLOW_UP 候选是针对上一题回答生成的，
+     * 跨题复用会问出与当前回答无关的追问，因此重建时剔除 FOLLOW_UP 类型；
+     * 同阶段换题 / 下一阶段入口候选与题目无关，可安全复用。
      */
     private List<CandidatePoolItem> readRecentSnapshot(Long sessionId) {
         AnswerEvaluation latest = answerEvaluationMapper.selectOne(
@@ -232,6 +236,8 @@ public class FollowUpPoolService {
                     candidates.traverse(),
                     new com.fasterxml.jackson.core.type.TypeReference<List<CandidatePoolItem>>() {
                     });
+            // 剔除针对上一题回答生成的追问候选（跨题复用语义错位）
+            items.removeIf(item -> "FOLLOW_UP".equals(item.getCandidateType()));
             return items.isEmpty() ? null : items;
         } catch (IOException exception) {
             log.warn("候选池快照解析失败 sessionId={} error={}", sessionId, exception.getMessage());

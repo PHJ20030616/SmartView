@@ -90,7 +90,7 @@ class StagePolicyEngineTest {
     void rule2_stageMax_forcesNextStage() {
         StagePolicyEngine.DecisionInput in = input();
         in.setScore(60);
-        in.setPool(List.of(item("FOLLOW_UP", "并发")));
+        in.setPool(List.of(item("FOLLOW_UP", "并发"), item("NEXT_STAGE_ENTRY", "电商")));
         // 覆盖度 BASIC.question_count 改为 5（达到 max_questions）
         in.setStageCoverageJson(COVERAGE.replace("\"question_count\": 2", "\"question_count\": 5"));
 
@@ -98,6 +98,22 @@ class StagePolicyEngineTest {
 
         assertThat(d.getNextAction()).isEqualTo("NEXT_STAGE");
         assertThat(d.getNextStage()).isEqualTo("PROJECT");
+        // 不变量：非 FINISH 决策必带候选
+        assertThat(d.getSelectedCandidate()).isNotNull();
+    }
+
+    @Test
+    void rule2_stageMax_withoutEntryCandidate_finishNoValidQuestion() {
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(60);
+        in.setPool(List.of(item("FOLLOW_UP", "并发")));  // 无 NEXT_STAGE_ENTRY 候选
+        in.setStageCoverageJson(COVERAGE.replace("\"question_count\": 2", "\"question_count\": 5"));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        // 必须推进但无下一阶段入口候选：降级结束而非产出缺候选的 NEXT_STAGE（避免事务层 500）
+        assertThat(d.getNextAction()).isEqualTo("FINISH");
+        assertThat(d.getEndReason()).isEqualTo("NO_VALID_QUESTION");
     }
 
     @Test
@@ -180,6 +196,35 @@ class StagePolicyEngineTest {
 
         assertThat(d.getNextAction()).isEqualTo("FINISH");
         assertThat(d.getEndReason()).isEqualTo("PLAN_COMPLETED");
+    }
+
+    @Test
+    void stageMax_effectiveCount_advancesWhenCurrentAnswerReachesMax() {
+        // BASIC 已答 4 题（max=5），本题为第 5 题：落库后题量=5 → 应推进（修复 off-by-one）
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(70);
+        in.setPool(List.of(item("NEXT_STAGE_ENTRY", "电商")));
+        in.setAnsweredQuestionType("OPENING");
+        in.setAnsweredTopic("并发");
+        in.setStageCoverageJson(COVERAGE.replace("\"question_count\": 2", "\"question_count\": 4"));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("NEXT_STAGE");
+        assertThat(d.getNextStage()).isEqualTo("PROJECT");
+    }
+
+    @Test
+    void mediumScore_withOnlyFollowUps_followUpKeepsInterviewAlive() {
+        // 得分 60、池中仅有追问候选（无换题/入口）：无法换题或推进，兜底追问保持面试
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(60);
+        in.setPool(List.of(item("FOLLOW_UP", "并发")));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(d.getSelectedCandidate()).isNotNull();
     }
 
     @Test

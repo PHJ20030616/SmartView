@@ -91,6 +91,8 @@ class InterviewAnswerServiceTest {
 
     @Test
     void submitAnswer_requestIdExists_returnsExistingWithoutPersist() {
+        // 会话归属校验先于幂等返回：需先加载会话
+        when(sessionMapper.selectById(1L)).thenReturn(session());
         when(answerMapper.selectOne(any())).thenReturn(
                 InterviewAnswer.builder().id(100L).sessionId(1L).questionId(11L).build());
         when(answerEvaluationMapper.selectOne(any())).thenReturn(
@@ -104,6 +106,17 @@ class InterviewAnswerServiceTest {
 
         assertThat(result.getAnswerId()).isEqualTo("100");
         verify(answerTxService, never()).persist(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void submitAnswer_idempotencyChecksOwnershipBeforeReplay() {
+        // 越权：非本人访问他人会话 + 已存在 request_id，必须先拒绝而非返回幂等结果
+        when(sessionMapper.selectById(1L)).thenReturn(session());  // session 归属 userId=7
+
+        assertThatThrownBy(() -> service.submitAnswer(99L, 1L,
+                request("00000000-0000-0000-0000-000000000001")))
+                .isInstanceOf(BusinessException.class);
+        verify(answerMapper, never()).selectOne(any());
     }
 
     @Test

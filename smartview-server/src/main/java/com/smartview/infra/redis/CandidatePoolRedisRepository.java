@@ -92,10 +92,18 @@ public class CandidatePoolRedisRepository {
 
     /**
      * 把追问候选池并入同一 key：先移除既有 FOLLOW_UP 类型再追加，避免多次回答残留旧追问。
+     *
+     * 预生成池 key 缺失（异步预生成未完成/过期/Redis 丢失）时不创建"仅追问"池：
+     * 否则会遮蔽缺失的同阶段换题与下一阶段入口候选，且该 key 一旦存在，
+     * getPool 的 3.5 重建链（含按评估事实重生成追问）将不再触发。
      */
     public void mergeFollowUps(String key, List<CandidatePoolItem> followUps) {
         List<CandidatePoolItem> existing = read(key);
-        List<CandidatePoolItem> merged = existing == null ? new ArrayList<>() : new ArrayList<>(existing);
+        if (existing == null) {
+            log.warn("候选池 key 缺失，跳过追问合并，等待重建补齐，key={}", key);
+            return;
+        }
+        List<CandidatePoolItem> merged = new ArrayList<>(existing);
         merged.removeIf(item -> "FOLLOW_UP".equals(item.getCandidateType()));
         merged.addAll(followUps);
         save(key, merged);

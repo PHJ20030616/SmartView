@@ -73,6 +73,10 @@ public class StagePolicyEngine {
         private int consecutiveWeakCount;
         /** 合并后的候选池（追问 + 同阶段换题 + 下一阶段入口） */
         private List<CandidatePoolItem> pool = new ArrayList<>();
+        /** 被回答题的类型（FOLLOW_UP 与否影响当前主题追问深度计数） */
+        private String answeredQuestionType;
+        /** 被回答题的主题（用于覆盖判定：本题落库后该主题视为已覆盖） */
+        private String answeredTopic;
     }
 
     /**
@@ -99,12 +103,16 @@ public class StagePolicyEngine {
      *
      * 顺序：规则1 硬性终止 → 规则2 全部阶段满足则结束 → 规则2 当前阶段达到 max 必须推进
      * → 规则3/5 正常流程 → 规则4 空池降级 → 规则2 当前阶段可推进 → 兜底。
+     *
+     * 不变量：非 FINISH 决策必然携带 selectedCandidate，事务层据此落库下一题；
+     * 无法取得候选的推进一律降级为 FINISH(NO_VALID_QUESTION)，避免 500。
      */
     public Decision decide(DecisionInput in) {
         JsonNode plan = parse(in.getStagePlanJson());
         JsonNode coverage = parse(in.getStageCoverageJson());
         JsonNode currentPlan = planStage(plan, in.getCurrentStage());
         int totalCount = in.getQuestionCount();
+        boolean currentIsFollowUp = "FOLLOW_UP".equals(in.getAnsweredQuestionType());
 
         // 规则1（最高优先级）：硬性终止条件
         if (totalCount >= totalMax(plan)) {
@@ -119,27 +127,38 @@ public class StagePolicyEngine {
         List<CandidatePoolItem> switches = candidatesOf(in.getPool(), CANDIDATE_SWITCH);
         List<CandidatePoolItem> entries = candidatesOf(in.getPool(), CANDIDATE_ENTRY);
         String nextStage = nextStageOf(plan, in.getCurrentStage());
-        boolean hasNextStage = nextStage != null;
+
+        // 决策时覆盖度为本题提交前的状态；本题落库后当前阶段题数/覆盖/追问深度会变化，
+        // 因此推进与上限判断基于"提交后"的有效值，避免每阶段实际多问 1 题（policy 2.4 规则2）。
+        int currentCount = stageCount(coverage, in.getCurrentStage()) + 1;
+        int effectiveFollowUpCount = followUpCount(coverage, in.getCurrentStage())
+                + (currentIsFollowUp ? 1 : 0);
+        List<String> effectiveCovered = new ArrayList<>(coveredTopics(coverage, in.getCurrentStage()));
+        if (in.getAnsweredTopic() != null && !in.getAnsweredTopic().isBlank()
+                && !effectiveCovered.contains(in.getAnsweredTopic())) {
+            effectiveCovered.add(in.getAnsweredTopic());
+        }
+        // 规则3：达到单主题最大追问深度则禁止追问
+        boolean depthLimited = currentPlan != null
+                && effectiveFollowUpCount >= maxFollowUpDepth(currentPlan);
 
         // 规则2：全部阶段满足推进条件且总题量达到最少题量 → 结束（先于单阶段强制推进，
         // 保证最后一个阶段完成时正确结束而不是产生 NEXT_STAGE(null)）
-        if (allStagesSatisfied(plan, coverage) && totalCount >= totalMin(plan)) {
+        if (allStagesSatisfied(plan, coverage, in.getCurrentStage(), currentCount, effectiveCovered)
+                && totalCount >= totalMin(plan)) {
             return finish(END_PLAN_COMPLETED, "全部阶段满足推进条件且总题量达到 " + totalMin(plan) + "，结束面试");
         }
         // 规则2：当前阶段题量达到 max_questions 必须推进
-        if (currentPlan != null
-                && stageCount(coverage, in.getCurrentStage()) >= maxQuestions(currentPlan)) {
-            return nextStage(nextStage, pick(entries), "当前阶段题量达到上限 " + maxQuestions(currentPlan));
+        if (currentPlan != null && currentCount >= maxQuestions(currentPlan)) {
+            if (!entries.isEmpty()) {
+                return nextStage(nextStage, entries.get(0), "当前阶段题量达到上限 " + maxQuestions(currentPlan));
+            }
+            return finish(END_NO_VALID_QUESTION, "当前阶段题量已达上限但无下一阶段入口候选，结束面试");
         }
-
-        // 规则3：达到单主题最大追问深度则禁止追问
-        boolean depthLimited = currentPlan != null
-                && followUpCount(coverage, in.getCurrentStage()) >= maxFollowUpDepth(currentPlan);
 
         // 规则5：正常流程 —— 高质量且可追问 → 追问；否则同阶段有换题候选 → 换题
         if (!depthLimited && in.getScore() >= 70 && !followUps.isEmpty()) {
-            CandidatePoolItem item = followUps.get(0);
-            return followUp(item, "回答质量良好（得分 " + in.getScore() + "）且未达追问深度，选择追问候选");
+            return followUp(followUps.get(0), "回答质量良好（得分 " + in.getScore() + "）且未达追问深度，选择追问候选");
         }
         if (!switches.isEmpty()) {
             CandidatePoolItem item = pickSwitch(switches,
@@ -157,22 +176,19 @@ public class StagePolicyEngine {
             return finish(END_NO_VALID_QUESTION, "候选池耗尽（含下一阶段入口），结束面试");
         }
 
-        // 规则2：当前阶段覆盖充分且达到最少题量 → 可推进
-        if (currentPlan != null && allCovered(coverage, in.getCurrentStage(), currentPlan)
-                && stageCount(coverage, in.getCurrentStage()) >= minQuestions(currentPlan)) {
-            if (!entries.isEmpty()) {
-                return nextStage(nextStage, entries.get(0), "本阶段必覆盖主题已覆盖且达到最少题量，进入下一阶段");
-            }
-            if (hasNextStage) {
-                return nextStage(nextStage, null, "本阶段必覆盖主题已覆盖，进入下一阶段");
-            }
+        // 规则2：当前阶段覆盖充分且达到最少题量 → 可推进（仅当存在入口候选时，
+        // 否则交由兜底用追问候选保持面试，避免 NEXT_STAGE 缺下一题）
+        if (currentPlan != null && currentCount >= minQuestions(currentPlan)
+                && containsAll(effectiveCovered, requiredTopics(currentPlan)) && !entries.isEmpty()) {
+            return nextStage(nextStage, entries.get(0), "本阶段必覆盖主题已覆盖且达到最少题量，进入下一阶段");
         }
 
-        // 兜底：无可用候选或无法推进 → 进入下一阶段或结束
-        if (hasNextStage) {
-            return nextStage(nextStage, null, "无可用候选或推进条件不满足，进入下一阶段");
+        // 兜底：仍有追问候选则追问（无换题/入口候选时复用追问保持面试推进），
+        // 否则候选池耗尽结束。此分支保证非 FINISH 决策必带候选（不变量）。
+        if (!depthLimited && !followUps.isEmpty()) {
+            return followUp(followUps.get(0), "无可用换题/入口候选，复用追问候选保持面试推进");
         }
-        return finish(END_NO_VALID_QUESTION, "无可用候选且无下一阶段，结束面试");
+        return finish(END_NO_VALID_QUESTION, "候选池耗尽且无下一阶段入口，结束面试");
     }
 
     // ==================== 决策工厂 ====================
@@ -219,10 +235,6 @@ public class StagePolicyEngine {
             }
         }
         return result;
-    }
-
-    private CandidatePoolItem pick(List<CandidatePoolItem> items) {
-        return items.isEmpty() ? null : items.get(0);
     }
 
     /**
@@ -332,9 +344,8 @@ public class StagePolicyEngine {
         return result;
     }
 
-    private boolean allCovered(JsonNode coverage, String stage, JsonNode planStage) {
-        List<String> covered = coveredTopics(coverage, stage);
-        for (String topic : requiredTopics(planStage)) {
+    private boolean containsAll(List<String> covered, List<String> required) {
+        for (String topic : required) {
             if (!covered.contains(topic)) {
                 return false;
             }
@@ -344,16 +355,24 @@ public class StagePolicyEngine {
 
     /**
      * 阶段满足推进条件：题量达到 max，或必覆盖主题全部覆盖且题量达到 min。
+     * count/covered 由调用方传入（当前阶段使用本题提交后的有效值，其他阶段用覆盖度现值）。
      */
-    private boolean stageSatisfied(JsonNode coverage, JsonNode stage) {
-        String name = stage.path("stage").asText();
-        return stageCount(coverage, name) >= maxQuestions(stage)
-                || (allCovered(coverage, name, stage) && stageCount(coverage, name) >= minQuestions(stage));
+    private boolean stageSatisfied(JsonNode stage, int count, List<String> covered) {
+        return count >= maxQuestions(stage)
+                || (containsAll(covered, requiredTopics(stage)) && count >= minQuestions(stage));
     }
 
-    private boolean allStagesSatisfied(JsonNode plan, JsonNode coverage) {
+    /**
+     * 全部阶段满足推进条件；当前阶段按本题提交后的有效值（题量 +1、主题并入覆盖）判断。
+     */
+    private boolean allStagesSatisfied(JsonNode plan, JsonNode coverage, String currentStage,
+            int currentCount, List<String> effectiveCovered) {
         for (JsonNode stage : plan.path("stages")) {
-            if (!stageSatisfied(coverage, stage)) {
+            String name = stage.path("stage").asText();
+            boolean isCurrent = name.equals(currentStage);
+            int count = isCurrent ? currentCount : stageCount(coverage, name);
+            List<String> covered = isCurrent ? effectiveCovered : coveredTopics(coverage, name);
+            if (!stageSatisfied(stage, count, covered)) {
                 return false;
             }
         }

@@ -25,14 +25,19 @@ def build_candidate_pool(state: dict[str, Any]) -> dict[str, Any]:
 
     items: list[CandidatePoolItem] = []
     seen: set[tuple[str, str]] = set()
+    current_topic = str(state.get("current_topic") or "").strip()
     for candidate in raw:
         question_text = str(candidate.get("questionText") or "").strip()
         topic = str(candidate.get("topic") or "").strip()
         candidate_type = str(candidate.get("candidateType") or "")
         if not question_text or not topic:
             continue
-        # 与已问主题去重，避免重复出题；追问候选故意复用当前主题，不参与该去重
-        if candidate_type != "FOLLOW_UP" and topic in seen_topics:
+        # 与已问主题去重，避免重复出题。追问候选允许复用"当前主题"（追问本就围绕
+        # 当前题展开），但若 LLM 把追问主题漂移到其他已问主题，仍按已问主题去重丢弃。
+        if candidate_type == "FOLLOW_UP":
+            if topic in seen_topics and topic != current_topic:
+                continue
+        elif topic in seen_topics:
             continue
         key = (topic, question_text)
         if key in seen:

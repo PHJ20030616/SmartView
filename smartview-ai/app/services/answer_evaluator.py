@@ -17,14 +17,16 @@ log = logging.getLogger(__name__)
 
 # 明确表示不会/不熟悉的回答：直接给低分（不调用 LLM）
 _WEAK_KEYWORDS = ("不会", "不熟悉", "不知道", "没学过", "不清楚", "不了解", "答不上来")
-# 低于该字数视为未作答
-_MIN_ANSWER_LENGTH = 2
 
 
 def _is_weak_keyword(answer_text: str) -> bool:
-    """判断回答是否明确表示不会/不熟悉，或作答过短。"""
+    """判断回答是否明确表示不会/不熟悉，或完全空白未作答。
+
+    仅对空白与显式否定关键词判弱；简短但肯定的回答（如"了解"）交给 LLM 评估，
+    避免误杀自信回答导致提前触发 QUALITY_TOO_LOW 结束。
+    """
     text = (answer_text or "").strip()
-    if len(text) <= _MIN_ANSWER_LENGTH:
+    if not text:
         return True
     return any(kw in text for kw in _WEAK_KEYWORDS)
 

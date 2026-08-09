@@ -100,7 +100,16 @@ public class InterviewAnswerService {
     public SubmitAnswerData submitAnswer(Long userId, Long sessionId, SubmitAnswerRequest request) {
         validateRequest(request);
 
-        // ① 幂等：request_id 已存在 → 返回既有结果。必须在当前题校验前判断，
+        // ① 会话归属校验（先于幂等返回，防止携带他人会话 ID + 已知 request_id 越权读取回答）
+        InterviewSession session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ResponseCode.NOT_FOUND, "面试会话不存在");
+        }
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问该面试会话", HttpStatus.FORBIDDEN);
+        }
+
+        // ② 幂等：request_id 已存在 → 返回既有结果。必须在当前题校验前判断，
         //    因为首次提交已推进会话，重试时 current_question_id 已变化。
         InterviewAnswer existing = answerMapper.selectOne(
                 new LambdaQueryWrapper<InterviewAnswer>()
@@ -109,19 +118,10 @@ public class InterviewAnswerService {
             return buildIdempotentResult(sessionId, existing);
         }
 
-        // ② 会话归属与状态校验
-        InterviewSession session = sessionMapper.selectById(sessionId);
-        if (session == null) {
-            throw new BusinessException(ResponseCode.NOT_FOUND, "面试会话不存在");
-        }
-        if (!userId.equals(session.getUserId())) {
-            throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问该面试会话", HttpStatus.FORBIDDEN);
-        }
+        // ③ 会话状态与当前题目校验（提交过期或非当前题目被拒绝）
         if (!InterviewSessionStatus.IN_PROGRESS.getCode().equals(session.getStatus())) {
             throw new BusinessException(ResponseCode.CONFLICT, "会话不在面试进行中，无法提交回答", HttpStatus.CONFLICT);
         }
-
-        // ③ 当前题目校验（提交过期或非当前题目被拒绝）
         InterviewQuestion current = requireCurrentQuestion(session, request.getQuestionId());
 
         // ④ 事务外调用 FastAPI 评估；失败不落库，允许用户重试（policy 5.2）
@@ -146,7 +146,7 @@ public class InterviewAnswerService {
         // ⑦ 确定性决策（policy 2.4）
         int consecutiveWeak = computeConsecutiveWeak(session.getId(), eval);
         StagePolicyEngine.Decision decision = stagePolicyEngine.decide(
-                buildDecisionInput(session, eval, pool, consecutiveWeak));
+                buildDecisionInput(session, current, eval, pool, consecutiveWeak));
 
         // ⑧ 单事务落库推进（乐观锁在事务内校验）
         SubmitAnswerData result = answerTxService.persist(
@@ -274,7 +274,7 @@ public class InterviewAnswerService {
     }
 
     private StagePolicyEngine.DecisionInput buildDecisionInput(
-            InterviewSession session, AiEvaluateAnswerResponse eval,
+            InterviewSession session, InterviewQuestion current, AiEvaluateAnswerResponse eval,
             List<CandidatePoolItem> pool, int consecutiveWeak) {
         StagePolicyEngine.DecisionInput input = new StagePolicyEngine.DecisionInput();
         input.setStagePlanJson(session.getStagePlanJson());
@@ -286,6 +286,9 @@ public class InterviewAnswerService {
         input.setMatchedPoints(eval.getMatchedPoints() == null ? new ArrayList<>() : eval.getMatchedPoints());
         input.setConsecutiveWeakCount(consecutiveWeak);
         input.setPool(pool == null ? List.of() : pool);
+        // 被答题信息：引擎据此用"本题提交后"的有效覆盖度判断推进/上限（避免每阶段多问 1 题）
+        input.setAnsweredQuestionType(current.getQuestionType());
+        input.setAnsweredTopic(current.getTopic());
         return input;
     }
 

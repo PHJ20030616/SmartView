@@ -24,6 +24,7 @@ import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.model.CandidatePoolItem;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -82,6 +83,25 @@ public class InterviewAnswerTxService {
      */
     @Transactional(rollbackFor = Exception.class)
     public SubmitAnswerData persist(Long userId,
+            com.smartview.interview.entity.InterviewSession session,
+            com.smartview.interview.entity.InterviewQuestion currentQuestion,
+            SubmitAnswerRequest request,
+            AiEvaluateAnswerResponse eval,
+            StagePolicyEngine.Decision decision,
+            List<CandidatePoolItem> pool) {
+        try {
+            return doPersist(userId, session, currentQuestion, request, eval, decision, pool);
+        } catch (DuplicateKeyException exception) {
+            // 并发重复提交（同 request_id 或同题目不同 request_id）在事务内撞唯一索引，
+            // 先于乐观锁触发。按 policy 4.3 映射为 409 冲突而非 500，由前端刷新重试。
+            log.warn("回答提交唯一键冲突，按重复提交处理 sessionId={} questionId={}",
+                    session.getId(), currentQuestion.getId());
+            throw new BusinessException(ResponseCode.CONFLICT,
+                    "该题目已提交过回答或会话已推进，请刷新后重试", HttpStatus.CONFLICT);
+        }
+    }
+
+    private SubmitAnswerData doPersist(Long userId,
             com.smartview.interview.entity.InterviewSession session,
             com.smartview.interview.entity.InterviewQuestion currentQuestion,
             SubmitAnswerRequest request,

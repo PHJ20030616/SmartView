@@ -27,8 +27,21 @@ def test_weak_keyword_returns_low_score_without_llm():
 
 
 def test_short_answer_considered_weak():
+    # "不会"命中否定关键词 → 直接低分
     facts = _run(answer_text="不会")
     assert facts["score"] < 40
+
+
+def test_short_confident_answer_not_weak(monkeypatch):
+    # 简短但肯定的回答（如"了解"）不应被误判为弱答，应走 LLM 评估
+    async def fake(messages, settings, *, what="回答评估", repair_error=None):
+        return {"score": 80, "level": "GOOD", "matchedPoints": ["了解"],
+                "missingPoints": [], "riskPoints": []}
+    monkeypatch.setattr(ae, "call_deepseek_json", fake)
+
+    facts = _run(answer_text="了解")
+    assert facts["score"] == 80
+    assert facts["level"] == "GOOD"
 
 
 def test_normal_answer_calls_llm_and_normalizes(monkeypatch):
