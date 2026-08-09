@@ -136,36 +136,70 @@ public class FollowUpPoolService {
      * @return 候选题列表；全部失败时返回空列表，由 StagePolicyEngine 降级
      */
     public List<CandidatePoolItem> getPool(InterviewSession session, Long questionId) {
+        return getPool(session, questionId, null);
+    }
+
+    /**
+     * 读取候选池（带评估事实版本）。
+     *
+     * 与无参版本的区别：回答提交后重建时（Redis 缺失），若携带本次评估事实，
+     * 同步重生成追问候选并并入池（memory 前向契约：回答后重建应能生成 FOLLOW_UP），
+     * 避免追问池因 Redis 缺失而静默丢失。
+     *
+     * @param evaluationFacts 本次回答评估事实；无评估（非回答路径）时传 null
+     */
+    public List<CandidatePoolItem> getPool(InterviewSession session, Long questionId,
+            AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
         String key = key(session, questionId);
         List<CandidatePoolItem> pool = redisRepository.read(key);
         if (pool != null) {
             return pool;
         }
-        return rebuild(session, questionId);
+        return rebuild(session, questionId, evaluationFacts);
     }
 
     // ==================== 重建链路（interview-policy.md 3.5） ====================
 
     /**
-     * 候选池重建：① 最近 5 分钟决策快照 ② 同步调 FastAPI 重生成 ③ 空。
+     * 候选池重建：① 最近 5 分钟决策快照 ② 同步调 FastAPI 重生成
+     * （预生成池 + 有评估事实时补追问池） ③ 空。
      */
-    private List<CandidatePoolItem> rebuild(InterviewSession session, Long questionId) {
+    private List<CandidatePoolItem> rebuild(InterviewSession session, Long questionId,
+            AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
         List<CandidatePoolItem> fromSnapshot = readRecentSnapshot(session.getId());
         if (fromSnapshot != null) {
             savePool(session, questionId, fromSnapshot);
             return fromSnapshot;
         }
+        List<CandidatePoolItem> pre = generatePool(session, questionId, "PRE_GENERATED", null);
+        List<CandidatePoolItem> followUps = evaluationFacts == null
+                ? List.of()
+                : generatePool(session, questionId, "FOLLOW_UP", evaluationFacts);
+        List<CandidatePoolItem> combined = new ArrayList<>(pre);
+        combined.addAll(followUps);
+        if (!combined.isEmpty()) {
+            savePool(session, questionId, combined);
+        }
+        return combined;
+    }
+
+    /**
+     * 同步生成指定类型候选池；调用失败或无候选返回空列表（可降级）。
+     */
+    private List<CandidatePoolItem> generatePool(InterviewSession session, Long questionId,
+            String poolType, AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
         try {
-            AiGenerateCandidatePoolRequest request = buildRequest(session, questionId, "PRE_GENERATED", null);
+            AiGenerateCandidatePoolRequest request =
+                    buildRequest(session, questionId, poolType, evaluationFacts);
             AiGenerateCandidatePoolResponse response = aiInterviewClient.generateCandidatePool(request);
             if (Boolean.TRUE.equals(response.getSuccess())
                     && response.getCandidates() != null && !response.getCandidates().isEmpty()) {
-                savePool(session, questionId, response.getCandidates());
                 return response.getCandidates();
             }
-            log.warn("候选池同步重建返回空 sessionId={}", session.getId());
+            log.warn("候选池同步生成返回空 sessionId={} poolType={}", session.getId(), poolType);
         } catch (BusinessException exception) {
-            log.warn("候选池同步重建失败 sessionId={} error={}", session.getId(), exception.getMessage());
+            log.warn("候选池同步生成失败 sessionId={} poolType={} error={}",
+                    session.getId(), poolType, exception.getMessage());
         }
         return List.of();
     }
