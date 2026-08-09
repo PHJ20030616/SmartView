@@ -22,7 +22,7 @@ import {
 } from "../features/auth";
 import HomePage from "../pages/home/HomePage";
 import InterviewPage from "../pages/interview/InterviewPage";
-import InterviewSessionPlaceholder from "../pages/interview/InterviewSessionPlaceholder";
+import InterviewSessionPage from "../pages/interview/InterviewSessionPage";
 import LoginPage from "../pages/login/LoginPage";
 import RegisterPage from "../pages/login/RegisterPage";
 import ReportPage from "../pages/report/ReportPage";
@@ -56,8 +56,9 @@ export const appRoutes: RouteObject[] = [
               { path: "resume/confirm/:profileId", element: <ResumeConfirmPage /> },
               { path: "interview", element: <InterviewPage /> },
               {
+                // 面试会话页：Task 5.5 由占位页切换为真实会话页面
                 path: "interview/session",
-                element: <InterviewSessionPlaceholder />,
+                element: <InterviewSessionPage />,
               },
               { path: "report", element: <ReportPage /> },
             ],

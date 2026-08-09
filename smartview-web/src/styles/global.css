@@ -1014,3 +1014,29 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ============ 面试会话页 ============ */
+.session-progress-text {
+  color: var(--text-color-secondary, rgba(0, 0, 0, 0.65));
+}
+.session-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.qa-card .qa-question {
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.qa-card .qa-answer {
+  margin-bottom: 8px;
+  color: var(--text-color, rgba(0, 0, 0, 0.88));
+  white-space: pre-wrap;
+}
+.qa-card .qa-evaluation {
+  padding-top: 4px;
+}
+.session-current-question {
+  font-size: 15px;
+}
