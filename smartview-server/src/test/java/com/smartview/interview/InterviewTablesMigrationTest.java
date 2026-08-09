@@ -55,7 +55,7 @@ class InterviewTablesMigrationTest {
     private JdbcTemplate jdbc;
 
     @BeforeEach
-    void applyV7OnFreshH2() {
+    void applyMigrationsOnFreshH2() {
         JdbcDataSource dataSource = new JdbcDataSource();
         dataSource.setURL("jdbc:h2:mem:sv_interview_" + DB_SEQ.getAndIncrement()
                 + ";MODE=MySQL;NON_KEYWORDS=USER;DATABASE_TO_LOWER=TRUE;"
@@ -88,9 +88,11 @@ class InterviewTablesMigrationTest {
                 + "`deleted` TINYINT(1) NOT NULL DEFAULT 0, "
                 + "PRIMARY KEY (`id`))");
 
-        // 应用 V7 迁移脚本（ResourceDatabasePopulator 负责按分号切分语句、剥离 -- 注释）
+        // 应用 V7 + V8 迁移脚本（ResourceDatabasePopulator 负责按分号切分语句、剥离 -- 注释）
         ResourceDatabasePopulator populator =
-                new ResourceDatabasePopulator(new ClassPathResource("db/migration/V7__create_interview_tables.sql"));
+                new ResourceDatabasePopulator(
+                        new ClassPathResource("db/migration/V7__create_interview_tables.sql"),
+                        new ClassPathResource("db/migration/V8__add_interview_answer_request_id_unique.sql"));
         populator.execute(dataSource);
     }
 
@@ -219,6 +221,22 @@ class InterviewTablesMigrationTest {
     }
 
     @Test
+    void requestIdIsGloballyUnique() {
+        // 构造最小依赖链
+        long userId = insertUser("interview_tables_req_user");
+        long resumeProfileId = insertResumeProfile(userId);
+        long profileAnalysisId = insertProfileAnalysis(userId, resumeProfileId);
+        long sessionId = insertSession(userId, resumeProfileId, profileAnalysisId);
+        long q1 = insertQuestion(sessionId, userId, 1, null, "OPENING", "JVM内存模型");
+        long q2 = insertQuestion(sessionId, userId, 2, null, "OPENING", "并发工具");
+        insertAnswer(sessionId, q1, userId, "req-unique-0001");
+
+        // 不同问题复用同一 request_id 必须被全局唯一索引拦截（回答提交幂等依赖）
+        assertThatThrownBy(() -> insertAnswer(sessionId, q2, userId, "req-unique-0001"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     void circularForeignKeyUsesSetNullOnDelete() {
         // 构造最小依赖链
         long userId = insertUser("interview_tables_fk_user");
@@ -297,6 +315,10 @@ class InterviewTablesMigrationTest {
     }
 
     private long insertAnswer(long sessionId, long questionId, long userId) {
+        return insertAnswer(sessionId, questionId, userId, "req-test-0001");
+    }
+
+    private long insertAnswer(long sessionId, long questionId, long userId, String requestId) {
         return insertAndReturnKey(
                 "INSERT INTO interview_answer "
                         + "(session_id, question_id, user_id, answer_text, answer_mode, "
@@ -304,7 +326,7 @@ class InterviewTablesMigrationTest {
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                 sessionId, questionId, userId,
                 "AbortPolicy、CallerRunsPolicy、DiscardPolicy、DiscardOldestPolicy",
-                "TEXT", 45, "req-test-0001");
+                "TEXT", 45, requestId);
     }
 
     private long insertEvaluation(long sessionId, long questionId, long answerId) {
