@@ -177,7 +177,7 @@
                             <generateModelTests>false</generateModelTests>
                             <generateSupportingFiles>false</generateSupportingFiles>
                             <globalProperties>
-                                <models>RegisterRequest,LoginRequest,UserInfo,LoginData,CreateInterviewSessionRequest,InterviewSessionResponse,InterviewSession,InterviewQuestion</models>
+                                <models>RegisterRequest,LoginRequest,UserInfo,LoginData,CreateInterviewSessionRequest,InterviewSessionResponse,InterviewSession,InterviewQuestion,SubmitAnswerRequest,SubmitAnswerData,AnswerEvaluation</models>
                             </globalProperties>
                             <configOptions>
                                 <sourceFolder>src/main/java</sourceFolder>

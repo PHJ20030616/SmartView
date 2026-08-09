@@ -1143,22 +1143,25 @@ components:
         - type: object
           properties:
             data:
-              type: object
-              required:
-                - answerId
-                - evaluation
-              properties:
-                answerId:
-                  type: string
-                  description: 回答 ID
-                evaluation:
-                  $ref: '#/components/schemas/AnswerEvaluation'
-                nextQuestion:
-                  $ref: '#/components/schemas/InterviewQuestion'
-                sessionStatus:
-                  type: string
-                  enum: [IN_PROGRESS, REPORTING, COMPLETED]
-                  description: 会话状态
+              $ref: '#/components/schemas/SubmitAnswerData'
+
+    SubmitAnswerData:
+      type: object
+      required:
+        - answerId
+        - evaluation
+      properties:
+        answerId:
+          type: string
+          description: 回答 ID
+        evaluation:
+          $ref: '#/components/schemas/AnswerEvaluation'
+        nextQuestion:
+          $ref: '#/components/schemas/InterviewQuestion'
+        sessionStatus:
+          type: string
+          enum: [IN_PROGRESS, REPORTING, COMPLETED]
+          description: 会话状态
 
     AnswerEvaluation:
       type: object
