@@ -1,6 +1,7 @@
 package com.smartview.interview.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.ai.client.AiFirstQuestionResponse;
@@ -51,6 +52,7 @@ import java.util.stream.Collectors;
  * - createSession：创建面试会话（校验确认简历与方向画像分析 → 生成阶段计划 →
  *   落库会话 → 同步调用 FastAPI 生成首题 → 落库首题 → 更新 current_question_id）
  * - getSession：查询会话详情，供页面刷新后恢复当前题目与已回答历史
+ * - finishSession：提前结束面试（仅 IN_PROGRESS 可转为 COMPLETED，记录 USER_FINISHED_EARLY）
  *
  * 关键设计：
  * 1. 会话创建在单个事务中完成，FastAPI 首题生成失败时整体回滚，
@@ -69,6 +71,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class InterviewSessionService {
+
+    /** 用户主动提前结束的结束原因（interview_session.end_reason，区别于 CANCELLED=放弃不生成报告） */
+    private static final String END_REASON_USER_FINISHED_EARLY = "USER_FINISHED_EARLY";
 
     private final InterviewSessionMapper sessionMapper;
     private final InterviewQuestionMapper questionMapper;
@@ -215,11 +220,8 @@ public class InterviewSessionService {
         if (!userId.equals(session.getUserId())) {
             throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问该面试会话", HttpStatus.FORBIDDEN);
         }
-        InterviewQuestion current = session.getCurrentQuestionId() == null
-                ? null
-                : questionMapper.selectById(session.getCurrentQuestionId());
-        // 会话详情附带已回答历史（仅 ANSWERED 问题，按提问顺序），供页面刷新后恢复问答记录
-        return dtoMapper.toResponse(session, current).answers(loadAnswerHistory(sessionId));
+        // 复用统一响应组装：当前问题 + 已回答历史，与提前结束返回保持结构一致
+        return buildSessionResponse(session);
     }
 
     /**
@@ -255,6 +257,46 @@ public class InterviewSessionService {
                         answerByQuestionId.get(question.getId()),
                         evaluationByQuestionId.get(question.getId())))
                 .toList();
+    }
+
+    /**
+     * 提前结束面试：仅 IN_PROGRESS 会话可转为 COMPLETED，记录 USER_FINISHED_EARLY 结束原因。
+     *
+     * 使用条件 UPDATE（WHERE id=? AND status='IN_PROGRESS'）天然防并发提交/结束竞态，
+     * 命中 0 行说明并发写入者已推进/结束会话，重读后幂等返回现状而非报错。
+     * 已处于终态的会话同样幂等返回现状，不重复改写终态。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public com.smartview.generated.web.model.InterviewSession finishSession(Long userId, Long sessionId) {
+        InterviewSession session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ResponseCode.NOT_FOUND, "面试会话不存在");
+        }
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问该面试会话", HttpStatus.FORBIDDEN);
+        }
+        if (!InterviewSessionStatus.IN_PROGRESS.getCode().equals(session.getStatus())) {
+            return buildSessionResponse(session);
+        }
+        sessionMapper.update(null, new LambdaUpdateWrapper<InterviewSession>()
+                .eq(InterviewSession::getId, sessionId)
+                .eq(InterviewSession::getStatus, InterviewSessionStatus.IN_PROGRESS.getCode())
+                .set(InterviewSession::getStatus, InterviewSessionStatus.COMPLETED.getCode())
+                .set(InterviewSession::getEndReason, END_REASON_USER_FINISHED_EARLY)
+                .set(InterviewSession::getEndedAt, LocalDateTime.now())
+                .setSql("version = version + 1"));
+        // 条件更新幂等：命中=本次结束成功；未命中=并发写入者已推进/结束。
+        // 统一重读最新状态再返回，避免内存态过时，同时保证已终态会话不被改写。
+        session = sessionMapper.selectById(sessionId);
+        return buildSessionResponse(session);
+    }
+
+    /** 组装会话响应：当前问题（可为空）+ 已回答历史 */
+    private com.smartview.generated.web.model.InterviewSession buildSessionResponse(InterviewSession session) {
+        InterviewQuestion current = session.getCurrentQuestionId() == null
+                ? null
+                : questionMapper.selectById(session.getCurrentQuestionId());
+        return dtoMapper.toResponse(session, current).answers(loadAnswerHistory(session.getId()));
     }
 
     /**

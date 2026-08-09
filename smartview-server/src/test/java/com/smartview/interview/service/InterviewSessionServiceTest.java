@@ -1,5 +1,8 @@
 package com.smartview.interview.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.ai.client.AiFirstQuestionResponse;
 import com.smartview.ai.client.AiInterviewClient;
@@ -20,12 +23,14 @@ import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -34,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -75,6 +81,20 @@ class InterviewSessionServiceTest {
 
     /** 记录 insert 时会话的初始状态（对象随后被 service 更新，captor 引用共享无法回看）。 */
     private String insertedSessionStatus;
+
+    /**
+     * 初始化 InterviewSession 的 MyBatis-Plus 表元数据（Lambda 缓存）。
+     *
+     * 纯 Mockito 单测没有 MyBatis-Plus 启动流程，LambdaUpdateWrapper 的列名解析
+     * 依赖 TableInfoHelper 构建的缓存（getSqlSet/getSqlSegment 触发），
+     * 此处手动初始化以便断言条件更新的 WHERE/SET 片段。
+     */
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                InterviewSession.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -426,5 +446,83 @@ class InterviewSessionServiceTest {
         assertThatThrownBy(() -> service.getSession(99L, 1L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("无权访问该面试会话");
+    }
+
+    @Test
+    void finishSession_进行中会话置为已完成并记录结束原因() {
+        InterviewSession inProgress = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").questionCount(3)
+                .expectedMinQuestions(5).expectedMaxQuestions(8).build();
+        InterviewSession completed = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").questionCount(3)
+                .expectedMinQuestions(5).expectedMaxQuestions(8)
+                .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
+        when(sessionMapper.selectById(1L)).thenReturn(inProgress, completed);
+        when(sessionMapper.update(isNull(), any())).thenReturn(1);
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
+
+        assertThat(response.getStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
+        assertThat(response.getEndedAt()).isNotNull();
+        assertThat(response.getAnswers()).isEmpty();
+        // 条件更新必须限定状态为 IN_PROGRESS 且版本自增，防并发覆盖终态
+        ArgumentCaptor<LambdaUpdateWrapper<InterviewSession>> captor =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(sessionMapper).update(isNull(), captor.capture());
+        assertThat(captor.getValue().getSqlSet()).contains("end_reason")
+                .contains("ended_at").contains("version = version + 1");
+        assertThat(captor.getValue().getSqlSegment()).contains("status");
+    }
+
+    @Test
+    void finishSession_会话不存在时返回404() {
+        when(sessionMapper.selectById(1L)).thenReturn(null);
+        assertThatThrownBy(() -> service.finishSession(7L, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("面试会话不存在");
+    }
+
+    @Test
+    void finishSession_非本人会话禁止() {
+        InterviewSession session = InterviewSession.builder().id(1L).userId(5L).status("IN_PROGRESS").build();
+        when(sessionMapper.selectById(1L)).thenReturn(session);
+        assertThatThrownBy(() -> service.finishSession(7L, 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("无权访问该面试会话");
+        verify(sessionMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void finishSession_已终态会话幂等返回且不再更新() {
+        InterviewSession completed = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").questionCount(3)
+                .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
+        when(sessionMapper.selectById(1L)).thenReturn(completed);
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
+
+        assertThat(response.getStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
+        verify(sessionMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void finishSession_并发下条件更新0行时按现状返回() {
+        InterviewSession inProgress = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").build();
+        InterviewSession concurrentCompleted = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").endedAt(LocalDateTime.now()).build();
+        when(sessionMapper.selectById(1L)).thenReturn(inProgress, concurrentCompleted);
+        when(sessionMapper.update(isNull(), any())).thenReturn(0);
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
+
+        // 并发写入者已把会话置为终态：以服务端现状为准，不抛错
+        assertThat(response.getStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
     }
 }
