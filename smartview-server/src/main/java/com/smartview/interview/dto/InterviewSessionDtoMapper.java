@@ -1,5 +1,7 @@
 package com.smartview.interview.dto;
 
+import com.smartview.generated.web.model.AnswerEvaluation;
+import com.smartview.generated.web.model.AnswerHistoryItem;
 import com.smartview.generated.web.model.InterviewQuestion;
 import com.smartview.generated.web.model.InterviewSession;
 import org.springframework.stereotype.Component;
@@ -77,6 +79,43 @@ public class InterviewSessionDtoMapper {
 
     private InterviewQuestion.QuestionTypeEnum safeQuestionType(String code) {
         return code == null ? null : InterviewQuestion.QuestionTypeEnum.fromValue(code);
+    }
+
+    /**
+     * 组装回答历史项（问题 + 回答 + 评估）。
+     *
+     * 仅映射对外白名单字段：问题复用 toQuestion，评估可为空（如未评估题目）。
+     * 回答实体必不为空（历史仅含已回答问题）。
+     */
+    public AnswerHistoryItem toAnswerHistoryItem(
+            com.smartview.interview.entity.InterviewQuestion question,
+            com.smartview.interview.entity.InterviewAnswer answer,
+            com.smartview.interview.entity.AnswerEvaluation evaluation) {
+        return new AnswerHistoryItem(toQuestion(question), answer.getAnswerText())
+                .durationSeconds(answer.getDurationSeconds())
+                .submittedAt(toOffsetDateTime(answer.getSubmittedAt()))
+                .evaluation(toEvaluation(evaluation));
+    }
+
+    /**
+     * 评估实体转 DTO：score/level 为必填受控字段，evaluationText 可选。
+     * 未知等级值安全缺省（返回 null），避免历史脏值导致 getSession 序列化 500。
+     */
+    private AnswerEvaluation toEvaluation(com.smartview.interview.entity.AnswerEvaluation entity) {
+        if (entity == null) {
+            return null;
+        }
+        AnswerEvaluation.LevelEnum level = null;
+        if (entity.getLevel() != null) {
+            try {
+                level = AnswerEvaluation.LevelEnum.fromValue(entity.getLevel());
+            } catch (IllegalArgumentException exception) {
+                // 未知等级值：响应缺省该字段而非整体 500（与既有安全转换一致）
+            }
+        }
+        return new AnswerEvaluation(entity.getScore(), level)
+                .id(entity.getId() == null ? null : String.valueOf(entity.getId()))
+                .evaluationText(entity.getEvaluationText());
     }
 
     private InterviewQuestion.SourceTypeEnum safeSourceType(String code) {

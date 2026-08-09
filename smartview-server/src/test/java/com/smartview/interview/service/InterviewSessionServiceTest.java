@@ -8,8 +8,11 @@ import com.smartview.common.enums.RoleDirection;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.CreateInterviewSessionRequest;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
+import com.smartview.interview.entity.InterviewAnswer;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
+import com.smartview.interview.mapper.AnswerEvaluationMapper;
+import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
@@ -24,6 +27,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,6 +65,10 @@ class InterviewSessionServiceTest {
     private AiInterviewClient aiInterviewClient;
     @Mock
     private FollowUpPoolService followUpPoolService;
+    @Mock
+    private InterviewAnswerMapper answerMapper;
+    @Mock
+    private AnswerEvaluationMapper evaluationMapper;
 
     private InterviewSessionService service;
     private ObjectMapper objectMapper;
@@ -81,7 +89,9 @@ class InterviewSessionServiceTest {
                 aiInterviewClient,
                 new InterviewSessionDtoMapper(),
                 objectMapper,
-                followUpPoolService);
+                followUpPoolService,
+                answerMapper,
+                evaluationMapper);
     }
 
     private ResumeProfile confirmedProfile() {
@@ -238,6 +248,8 @@ class InterviewSessionServiceTest {
                 .isEqualTo(com.smartview.generated.web.model.InterviewQuestion.SourceTypeEnum.KNOWLEDGE_BASE);
         assertThat(response.getExpectedMinQuestions()).isEqualTo(7);
         assertThat(response.getExpectedMaxQuestions()).isEqualTo(20);
+        // 新会话尚无历史：answers 必须为空数组而非 null
+        assertThat(response.getAnswers()).isEmpty();
         assertThat(response.getStatus())
                 .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.IN_PROGRESS);
 
@@ -307,6 +319,60 @@ class InterviewSessionServiceTest {
                 .isInstanceOf(BusinessException.class);
         verify(questionMapper, never()).insert(any(InterviewQuestion.class));
         verify(sessionMapper, never()).updateById(any(InterviewSession.class));
+    }
+
+    @Test
+    void getSession_返回已回答问题历史并按提问顺序排序() {
+        InterviewSession session = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").currentQuestionId(22L)
+                .questionCount(2).expectedMinQuestions(5).expectedMaxQuestions(8).build();
+        when(sessionMapper.selectById(1L)).thenReturn(session);
+        when(questionMapper.selectById(22L))
+                .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
+
+        when(questionMapper.selectList(any())).thenReturn(List.of(
+                InterviewQuestion.builder().id(11L).sessionId(1L).questionOrder(1)
+                        .questionText("问题一").status("ANSWERED").build(),
+                InterviewQuestion.builder().id(12L).sessionId(1L).questionOrder(2)
+                        .questionText("问题二").status("ANSWERED").build()));
+        when(answerMapper.selectList(any())).thenReturn(List.of(
+                InterviewAnswer.builder().id(101L).questionId(11L).answerText("回答一")
+                        .submittedAt(LocalDateTime.of(2026, 8, 9, 10, 0)).build(),
+                InterviewAnswer.builder().id(102L).questionId(12L).answerText("回答二")
+                        .submittedAt(LocalDateTime.of(2026, 8, 9, 10, 1)).build()));
+        when(evaluationMapper.selectList(any())).thenReturn(List.of(
+                com.smartview.interview.entity.AnswerEvaluation.builder()
+                        .id(201L).questionId(11L).score(85).level("GOOD")
+                        .evaluationText("要点清晰").build()));
+
+        com.smartview.generated.web.model.InterviewSession response = service.getSession(7L, 1L);
+
+        assertThat(response.getAnswers()).hasSize(2);
+        assertThat(response.getAnswers().get(0).getQuestion().getQuestionText()).isEqualTo("问题一");
+        assertThat(response.getAnswers().get(0).getAnswerText()).isEqualTo("回答一");
+        assertThat(response.getAnswers().get(0).getEvaluation().getScore()).isEqualTo(85);
+        assertThat(response.getAnswers().get(0).getEvaluation().getLevel())
+                .isEqualTo(com.smartview.generated.web.model.AnswerEvaluation.LevelEnum.GOOD);
+        assertThat(response.getAnswers().get(0).getEvaluation().getEvaluationText()).isEqualTo("要点清晰");
+        // 第二个问题无评估：evaluation 缺省为 null 而非报错
+        assertThat(response.getAnswers().get(1).getQuestion().getQuestionText()).isEqualTo("问题二");
+        assertThat(response.getAnswers().get(1).getEvaluation()).isNull();
+        // 当前题目仍正确恢复
+        assertThat(response.getCurrentQuestion().getQuestionText()).isEqualTo("当前题");
+    }
+
+    @Test
+    void getSession_无已回答问题时历史为空数组() {
+        InterviewSession session = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").currentQuestionId(22L).build();
+        when(sessionMapper.selectById(1L)).thenReturn(session);
+        when(questionMapper.selectById(22L))
+                .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSession response = service.getSession(7L, 1L);
+
+        assertThat(response.getAnswers()).isEmpty();
     }
 
     @Test
