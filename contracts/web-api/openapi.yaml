@@ -481,6 +481,28 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /api/interview-sessions/{sessionId}/finish:
+    post:
+      tags:
+        - 面试
+      summary: 提前结束面试
+      operationId: finishInterviewSession
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 结束成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewSessionResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/interview-sessions/{sessionId}/report:
     get:
       tags:
@@ -1051,6 +1073,11 @@ components:
           description: 会话状态
         currentQuestion:
           $ref: '#/components/schemas/InterviewQuestion'
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnswerHistoryItem'
+          description: 已回答的问题历史（含用户回答与评估），按提问顺序排序
         questionCount:
           type: integer
           description: 已提出问题数量
@@ -1115,6 +1142,29 @@ components:
           type: string
           format: date-time
           description: 提问时间
+
+    AnswerHistoryItem:
+      type: object
+      required:
+        - question
+        - answerText
+      properties:
+        question:
+          $ref: '#/components/schemas/InterviewQuestion'
+          description: 对应问题（复用问题白名单字段）
+        answerText:
+          type: string
+          description: 用户回答文本
+        durationSeconds:
+          type: integer
+          description: 作答耗时（秒）
+        submittedAt:
+          type: string
+          format: date-time
+          description: 回答提交时间
+        evaluation:
+          $ref: '#/components/schemas/AnswerEvaluation'
+          description: 回答评估（可为空，如未评估）
 
     SubmitAnswerRequest:
       type: object

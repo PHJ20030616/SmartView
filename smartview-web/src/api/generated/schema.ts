@@ -287,6 +287,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/interview-sessions/{sessionId}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 提前结束面试 */
+        post: operations["finishInterviewSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/interview-sessions/{sessionId}/report": {
         parameters: {
             query?: never;
@@ -652,6 +669,8 @@ export interface components {
              */
             status: "CREATED" | "IN_PROGRESS" | "REPORTING" | "COMPLETED" | "CANCELLED" | "FAILED";
             currentQuestion?: components["schemas"]["InterviewQuestion"];
+            /** @description 已回答的问题历史（含用户回答与评估），按提问顺序排序 */
+            answers?: components["schemas"]["AnswerHistoryItem"][];
             /** @description 已提出问题数量 */
             questionCount?: number;
             /** @description 预期最少问题数 */
@@ -708,6 +727,21 @@ export interface components {
              */
             askedAt?: string;
         };
+        AnswerHistoryItem: {
+            /** @description 对应问题（复用问题白名单字段） */
+            question: components["schemas"]["InterviewQuestion"];
+            /** @description 用户回答文本 */
+            answerText: string;
+            /** @description 作答耗时（秒） */
+            durationSeconds?: number;
+            /**
+             * Format: date-time
+             * @description 回答提交时间
+             */
+            submittedAt?: string;
+            /** @description 回答评估（可为空，如未评估） */
+            evaluation?: components["schemas"]["AnswerEvaluation"];
+        };
         SubmitAnswerRequest: {
             /** @description 问题 ID */
             questionId: string;
@@ -722,17 +756,18 @@ export interface components {
             durationSeconds?: number;
         };
         SubmitAnswerResponse: components["schemas"]["ApiResponse"] & {
-            data?: {
-                /** @description 回答 ID */
-                answerId: string;
-                evaluation: components["schemas"]["AnswerEvaluation"];
-                nextQuestion?: components["schemas"]["InterviewQuestion"];
-                /**
-                 * @description 会话状态
-                 * @enum {string}
-                 */
-                sessionStatus?: "IN_PROGRESS" | "REPORTING" | "COMPLETED";
-            };
+            data?: components["schemas"]["SubmitAnswerData"];
+        };
+        SubmitAnswerData: {
+            /** @description 回答 ID */
+            answerId: string;
+            evaluation: components["schemas"]["AnswerEvaluation"];
+            nextQuestion?: components["schemas"]["InterviewQuestion"];
+            /**
+             * @description 会话状态
+             * @enum {string}
+             */
+            sessionStatus?: "IN_PROGRESS" | "REPORTING" | "COMPLETED";
         };
         AnswerEvaluation: {
             /** @description 评估 ID */
@@ -1343,6 +1378,29 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    finishInterviewSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 结束成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterviewSessionResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     getSessionReport: {
