@@ -350,11 +350,13 @@ class InterviewSessionServiceTest {
         when(questionMapper.selectById(22L))
                 .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
 
+        // mock 故意以乱序（问题二在前）返回，验证服务端在内存中重新按提问序号排序，
+        // 而非仅依赖 mock/数据库返回顺序
         when(questionMapper.selectList(any())).thenReturn(List.of(
-                InterviewQuestion.builder().id(11L).sessionId(1L).questionOrder(1)
-                        .questionText("问题一").status("ANSWERED").build(),
                 InterviewQuestion.builder().id(12L).sessionId(1L).questionOrder(2)
-                        .questionText("问题二").status("ANSWERED").build()));
+                        .questionText("问题二").status("ANSWERED").build(),
+                InterviewQuestion.builder().id(11L).sessionId(1L).questionOrder(1)
+                        .questionText("问题一").status("ANSWERED").build()));
         when(answerMapper.selectList(any())).thenReturn(List.of(
                 InterviewAnswer.builder().id(101L).questionId(11L).answerText("回答一")
                         .submittedAt(LocalDateTime.of(2026, 8, 9, 10, 0)).build(),
@@ -473,7 +475,8 @@ class InterviewSessionServiceTest {
         verify(sessionMapper).update(isNull(), captor.capture());
         assertThat(captor.getValue().getSqlSet()).contains("end_reason")
                 .contains("ended_at").contains("version = version + 1");
-        assertThat(captor.getValue().getSqlSegment()).contains("status");
+        // WHERE 必须同时限定 id 与会话状态，防越权操作他人会话或覆盖终态
+        assertThat(captor.getValue().getSqlSegment()).contains("status").contains("id");
     }
 
     @Test

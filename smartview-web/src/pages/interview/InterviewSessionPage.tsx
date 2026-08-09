@@ -81,6 +81,7 @@ export default function InterviewSessionPage() {
     } else {
       setState({ phase: "ended", session });
     }
+    // 对账/推进后清空草稿与错误，避免残留上次输入
     setAnswerText("");
     setSubmitError(null);
     questionShownAtRef.current = Date.now();
@@ -215,6 +216,7 @@ export default function InterviewSessionPage() {
         } catch (error) {
           if (!mountedRef.current) return;
           if (isConflictError(error)) {
+            // 结束与并发提交竞态：以服务端现状对账，避免覆盖最新会话状态
             try {
               const fresh = await restoreSession(session.id);
               if (mountedRef.current) applySession(fresh);

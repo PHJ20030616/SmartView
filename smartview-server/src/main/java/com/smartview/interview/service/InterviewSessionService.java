@@ -34,12 +34,14 @@ import com.smartview.resume.mapper.ResumeProfileMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -251,7 +253,9 @@ public class InterviewSessionService {
                         .stream()
                         .collect(Collectors.toMap(
                                 com.smartview.interview.entity.AnswerEvaluation::getQuestionId, item -> item));
+        // 内存内再按提问序号排序：不依赖数据库返回顺序，确定性保证输出有序（同时使该保证可被单测直接验证）
         return answered.stream()
+                .sorted(Comparator.comparing(InterviewQuestion::getQuestionOrder))
                 .map(question -> dtoMapper.toAnswerHistoryItem(
                         question,
                         answerByQuestionId.get(question.getId()),
@@ -265,8 +269,12 @@ public class InterviewSessionService {
      * 使用条件 UPDATE（WHERE id=? AND status='IN_PROGRESS'）天然防并发提交/结束竞态，
      * 命中 0 行说明并发写入者已推进/结束会话，重读后幂等返回现状而非报错。
      * 已处于终态的会话同样幂等返回现状，不重复改写终态。
+     *
+     * 事务隔离级别显式取 READ_COMMITTED：条件更新后需重读会话最新状态返回；
+     * 若用默认的 REPEATABLE READ，一致性快照会让重读仍看到事务开始时的旧状态，
+     * 并发竞态下可能把过时状态返回给调用方，故放宽为读已提交以拿到最新落库数据。
      */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public com.smartview.generated.web.model.InterviewSession finishSession(Long userId, Long sessionId) {
         InterviewSession session = sessionMapper.selectById(sessionId);
         if (session == null) {
@@ -278,12 +286,15 @@ public class InterviewSessionService {
         if (!InterviewSessionStatus.IN_PROGRESS.getCode().equals(session.getStatus())) {
             return buildSessionResponse(session);
         }
+        // 条件更新传入空实体，MyMetaObjectHandler 的 updateFill 不会触发，
+        // 需显式落库 updated_at，保证最后更新时间与会话结束动作一致。
         sessionMapper.update(null, new LambdaUpdateWrapper<InterviewSession>()
                 .eq(InterviewSession::getId, sessionId)
                 .eq(InterviewSession::getStatus, InterviewSessionStatus.IN_PROGRESS.getCode())
                 .set(InterviewSession::getStatus, InterviewSessionStatus.COMPLETED.getCode())
                 .set(InterviewSession::getEndReason, END_REASON_USER_FINISHED_EARLY)
                 .set(InterviewSession::getEndedAt, LocalDateTime.now())
+                .set(InterviewSession::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1"));
         // 条件更新幂等：命中=本次结束成功；未命中=并发写入者已推进/结束。
         // 统一重读最新状态再返回，避免内存态过时，同时保证已终态会话不被改写。
