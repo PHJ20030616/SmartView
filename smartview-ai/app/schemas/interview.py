@@ -96,10 +96,56 @@ CandidateType = Literal["SAME_STAGE_SWITCH", "NEXT_STAGE_ENTRY", "FOLLOW_UP"]
 
 
 class SessionContext(BaseModel):
-    """会话上下文：当前主题与已提问数量。"""
+    """会话上下文：当前阶段/主题、已提问数量与覆盖度。
 
+    currentStage/stageCoverage 供回答评估与追问深度门控使用；
+    预生成候选池请求（GenerateCandidatePoolRequest）不携带二者，字段保持可选。
+    """
+
+    currentStage: str | None = None
     currentTopic: str | None = None
     questionCount: int | None = None
+    stageCoverage: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvaluateAnswerRequest(BaseModel):
+    """回答评估 HTTP 请求（Spring Boot → FastAPI）。
+
+    questionText/expectedPoints 是评估对照依据；stagePlan 用于追问深度门控，
+    均由 Spring 端携带当前题目信息透传，与 ai-api 契约一致。
+    """
+
+    sessionId: str
+    questionId: str
+    answerText: str
+    roleDirection: RoleDirection
+    questionText: str
+    expectedPoints: list[str] = Field(default_factory=list)
+    stagePlan: StagePlan = Field(default_factory=StagePlan)
+    sessionContext: SessionContext = Field(default_factory=SessionContext)
+    traceId: UUID
+
+
+class EvaluateAnswerResponse(BaseModel):
+    """回答评估 HTTP 响应：评估事实 + 追问候选池（0-2 道，完整 CandidatePoolItem）。"""
+
+    success: bool
+    score: int | None = None
+    level: str | None = None
+    matchedPoints: list[str] = Field(default_factory=list)
+    missingPoints: list[str] = Field(default_factory=list)
+    riskPoints: list[dict[str, Any]] = Field(default_factory=list)
+    followUpCandidates: list[CandidatePoolItem] = Field(default_factory=list)
+    errorMessage: str | None = None
+
+    @model_validator(mode="after")
+    def validate_response_invariants(self) -> "EvaluateAnswerResponse":
+        """成功必须带得分，失败必须带错误原因。"""
+        if self.success and self.score is None:
+            raise ValueError("评估成功时必须提供 score")
+        if not self.success and not (self.errorMessage or "").strip():
+            raise ValueError("评估失败时必须提供 errorMessage")
+        return self
 
 
 class EvaluationFacts(BaseModel):

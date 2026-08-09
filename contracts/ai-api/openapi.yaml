@@ -783,6 +783,8 @@ components:
         - sessionId
         - questionId
         - answerText
+        - roleDirection
+        - questionText
         - sessionContext
         - traceId
       properties:
@@ -795,6 +797,21 @@ components:
         answerText:
           type: string
           description: 用户回答文本
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
+        questionText:
+          type: string
+          description: 当前问题正文（评估对照依据之一）
+        expectedPoints:
+          type: array
+          description: 当前问题期望回答要点（评估对照依据）
+          items:
+            type: string
+        stagePlan:
+          type: object
+          description: 阶段计划（不透明 payload，用于追问深度门控，结构见 docs/interview-policy.md 2.2）
         sessionContext:
           type: object
           description: 会话上下文
@@ -851,22 +868,9 @@ components:
                 type: string
         followUpCandidates:
           type: array
-          description: 追问候选池（0-2 道）
+          description: 追问候选池（0-2 道，结构复用 CandidatePoolItem，携带主题/阶段/期望要点供下一轮评估）
           items:
-            type: object
-            required:
-              - questionText
-              - reason
-            properties:
-              questionText:
-                type: string
-                description: 追问题目
-              reason:
-                type: string
-                description: 追问原因
-              targetPoint:
-                type: string
-                description: 目标考察点
+            $ref: '#/components/schemas/CandidatePoolItem'
         errorMessage:
           type: string
           description: 评估失败原因
