@@ -55,6 +55,9 @@ public class AiInterviewClient {
     /** 候选池生成接口路径，与 ai-api 契约一致 */
     private static final String CANDIDATE_POOL_PATH = "/api/v1/interview/candidate-pool";
 
+    /** 回答评估接口路径，与 ai-api 契约一致 */
+    private static final String EVALUATE_PATH = "/api/v1/interview/evaluate";
+
     private final RestTemplate restTemplate;
     private final AiServiceProperties properties;
     private final ObjectMapper objectMapper;
@@ -171,6 +174,51 @@ public class AiInterviewClient {
                     request.getSessionId(), exception.getMessage(), exception);
             throw new BusinessException(
                     ResponseCode.INTERNAL_ERROR, "AI 服务暂不可用，候选池生成失败，请稍后重试");
+        }
+    }
+
+    /**
+     * 调用 FastAPI 评估回答并获取追问候选。
+     *
+     * 评估失败（success=false）时由调用方决定：不落库回答，返回错误允许用户重试
+     * （interview-policy.md 5.2「仍然失败→返回错误，允许用户重试」），
+     * 避免在无评估事实的情况下推进会话。
+     *
+     * @param request 回答评估请求（含题目正文/期望要点/阶段计划）
+     * @return FastAPI 返回的评估事实与追问候选
+     */
+    public AiEvaluateAnswerResponse evaluateAnswer(AiEvaluateAnswerRequest request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set(X_API_KEY_HEADER, properties.getApiKey());
+        headers.set(TraceIdContext.TRACE_ID_HEADER, request.getTraceId());
+
+        String url = properties.getBaseUrl().replaceAll("/+$", "") + EVALUATE_PATH;
+        try {
+            log.info("调用 FastAPI 评估回答，sessionId={}, questionId={}",
+                    request.getSessionId(), request.getQuestionId());
+            ResponseEntity<AiEvaluateAnswerResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    new HttpEntity<>(request, headers),
+                    AiEvaluateAnswerResponse.class);
+            AiEvaluateAnswerResponse body = response.getBody();
+            if (body == null) {
+                throw new BusinessException(ResponseCode.INTERNAL_ERROR, "AI 服务返回空响应，回答评估失败");
+            }
+            return body;
+        } catch (RestClientException exception) {
+            if (exception instanceof HttpStatusCodeException statusException
+                    && HttpStatus.UNAUTHORIZED.value() == statusException.getStatusCode().value()) {
+                log.error("AI 服务鉴权失败（401），请检查 AI_SERVICE_API_KEY 配置，sessionId={}",
+                        request.getSessionId());
+                throw new BusinessException(
+                        ResponseCode.INTERNAL_ERROR, "AI 服务鉴权配置错误，请联系管理员");
+            }
+            log.error("AI 服务回答评估调用失败，sessionId={}, error={}",
+                    request.getSessionId(), exception.getMessage(), exception);
+            throw new BusinessException(
+                    ResponseCode.INTERNAL_ERROR, "AI 服务暂不可用，回答评估失败，请稍后重试");
         }
     }
 

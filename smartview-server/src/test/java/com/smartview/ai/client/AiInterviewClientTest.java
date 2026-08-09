@@ -205,6 +205,86 @@ class AiInterviewClientTest {
                 .hasMessageContaining("空响应");
     }
 
+    @Test
+    void evaluateAnswer_成功解析评估事实与追问候选并透传头() {
+        AiEvaluateAnswerResponse body = new AiEvaluateAnswerResponse();
+        body.setSuccess(true);
+        body.setScore(85);
+        body.setLevel("GOOD");
+        body.setMatchedPoints(List.of("可见性"));
+        // 追问候选复用完整 CandidatePoolItem（契约改为完整结构）
+        CandidatePoolItem followUp = CandidatePoolItem.builder()
+                .questionText("volatile 能保证原子性吗？")
+                .topic("Java 并发")
+                .stage("BASIC")
+                .candidateType("FOLLOW_UP")
+                .build();
+        body.setFollowUpCandidates(List.of(followUp));
+
+        when(restTemplate.exchange(
+                eq("http://localhost:8000/api/v1/interview/evaluate"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(AiEvaluateAnswerResponse.class)))
+                .thenReturn(ResponseEntity.ok(body));
+
+        AiEvaluateAnswerResponse result = client.evaluateAnswer(evaluateRequest());
+
+        assertThat(result.getSuccess()).isTrue();
+        assertThat(result.getScore()).isEqualTo(85);
+        assertThat(result.getFollowUpCandidates()).hasSize(1);
+        assertThat(result.getFollowUpCandidates().get(0).getCandidateType()).isEqualTo("FOLLOW_UP");
+
+        ArgumentCaptor<HttpEntity<?>> entityCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+        org.mockito.Mockito.verify(restTemplate).exchange(
+                anyString(), eq(HttpMethod.POST), entityCaptor.capture(),
+                eq(AiEvaluateAnswerResponse.class));
+        HttpHeaders headers = entityCaptor.getValue().getHeaders();
+        assertThat(headers.getFirst("X-API-Key")).isEqualTo("secret-key");
+        assertThat(headers.getFirst("X-Trace-Id")).isEqualTo("trace-eval");
+        AiEvaluateAnswerRequest sent = (AiEvaluateAnswerRequest) entityCaptor.getValue().getBody();
+        assertThat(sent.getQuestionText()).isEqualTo("volatile 的作用？");
+        assertThat(sent.getSessionContext().getCurrentStage()).isEqualTo("BASIC");
+    }
+
+    @Test
+    void evaluateAnswer_连接超时映射为AI服务暂不可用() {
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(),
+                eq(AiEvaluateAnswerResponse.class)))
+                .thenThrow(new ResourceAccessException("Read timed out"));
+
+        assertThatThrownBy(() -> client.evaluateAnswer(evaluateRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("AI 服务暂不可用");
+    }
+
+    @Test
+    void evaluateAnswer_空响应体报错() {
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(),
+                eq(AiEvaluateAnswerResponse.class)))
+                .thenReturn(ResponseEntity.ok(null));
+
+        assertThatThrownBy(() -> client.evaluateAnswer(evaluateRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("空响应");
+    }
+
+    private AiEvaluateAnswerRequest evaluateRequest() {
+        AiEvaluateAnswerRequest request = new AiEvaluateAnswerRequest();
+        request.setSessionId("1");
+        request.setQuestionId("11");
+        request.setAnswerText("volatile 保证可见性");
+        request.setRoleDirection("JAVA_BACKEND");
+        request.setQuestionText("volatile 的作用？");
+        request.setTraceId("trace-eval");
+        AiEvaluateAnswerRequest.SessionContext context =
+                new AiEvaluateAnswerRequest.SessionContext();
+        context.setCurrentStage("BASIC");
+        context.setCurrentTopic("Java 并发");
+        request.setSessionContext(context);
+        return request;
+    }
+
     private AiGenerateCandidatePoolRequest request() {
         AiGenerateCandidatePoolRequest request = new AiGenerateCandidatePoolRequest();
         request.setSessionId("1");
