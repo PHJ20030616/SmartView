@@ -56,7 +56,7 @@ public class InterviewSessionDtoMapper {
                 .currentQuestion(toQuestion(currentQuestion));
     }
 
-    private InterviewQuestion toQuestion(com.smartview.interview.entity.InterviewQuestion entity) {
+    public InterviewQuestion toQuestion(com.smartview.interview.entity.InterviewQuestion entity) {
         if (entity == null) {
             return null;
         }
