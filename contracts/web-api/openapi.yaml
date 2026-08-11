@@ -1297,9 +1297,21 @@ components:
           description: 风险点
         suggestions:
           type: array
-          items:
-            type: string
           description: 学习建议
+          items:
+            type: object
+            properties:
+              topic:
+                type: string
+                description: 建议主题
+              reason:
+                type: string
+                description: 建议原因
+              resources:
+                type: array
+                items:
+                  type: string
+                description: 推荐资源
         coverage:
           type: object
           description: 覆盖情况
@@ -1342,6 +1354,20 @@ components:
           items:
             type: string
           description: 关键要点
+        tradeoffs:
+          type: array
+          description: 场景题中的权衡点
+          items:
+            type: object
+            properties:
+              aspect:
+                type: string
+                description: 权衡维度
+              options:
+                type: array
+                items:
+                  type: string
+                description: 可选方案
 
   responses:
     BadRequest:
