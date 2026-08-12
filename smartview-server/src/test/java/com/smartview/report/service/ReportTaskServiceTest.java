@@ -315,10 +315,18 @@ class ReportTaskServiceTest {
         when(aiTaskMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
         when(producer.sendWithRetry(any(), anyInt(), anyLong())).thenReturn(true);
 
-        service.compensateReportTask(oldTask);
+        boolean compensated = service.compensateReportTask(oldTask);
 
-        // 条件更新退休旧任务 → 插入新 taskId 补偿任务 → 事务提交后重投 MQ。
-        verify(aiTaskMapper).update(isNull(), any(UpdateWrapper.class));
+        assertThat(compensated).isTrue();
+        // 租约抢占退休旧任务：条件更新必须绑定观测到的 task_status 并带 finished_at IS NULL
+        // 谓词，否则退休后的 FAILED 任务仍会被扫描选中，导致重复补偿与无界累积。
+        ArgumentCaptor<UpdateWrapper<AiTask>> updateCaptor =
+                ArgumentCaptor.forClass(UpdateWrapper.class);
+        verify(aiTaskMapper).update(isNull(), updateCaptor.capture());
+        assertThat(updateCaptor.getValue().getSqlSegment())
+                .contains("task_status")
+                .contains("finished_at");
+        // 退休成功 → 插入新 taskId 补偿任务 → 事务提交后重投 MQ。
         ArgumentCaptor<AiTask> taskCaptor = ArgumentCaptor.forClass(AiTask.class);
         verify(aiTaskMapper).insert(taskCaptor.capture());
         assertThat(taskCaptor.getValue().getTaskType())
@@ -336,8 +344,9 @@ class ReportTaskServiceTest {
         completed.setStatus(InterviewSessionStatus.COMPLETED.getCode());
         when(sessionMapper.selectById(88L)).thenReturn(completed);
 
-        service.compensateReportTask(oldTask);
+        boolean compensated = service.compensateReportTask(oldTask);
 
+        assertThat(compensated).isFalse();
         verify(aiTaskMapper, never()).update(isNull(), any(UpdateWrapper.class));
         verify(aiTaskMapper, never()).insert(any(AiTask.class));
         verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
@@ -350,8 +359,25 @@ class ReportTaskServiceTest {
         // 条件更新退休影响 0 行（task_status 已 SUCCESS 或已被其他实例抢占）→ 不再重建。
         when(aiTaskMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(0);
 
-        service.compensateReportTask(oldTask);
+        boolean compensated = service.compensateReportTask(oldTask);
 
+        assertThat(compensated).isFalse();
+        verify(aiTaskMapper, never()).insert(any(AiTask.class));
+        verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
+    }
+
+    @Test
+    void compensateReportTask_returnsFalseWhenLeasePredicateNotMatched() {
+        // 模拟同一任务已被上一轮补偿退休（finished_at 已写入）：本轮旧任务不再满足
+        // finished_at IS NULL 租约，条件更新影响 0 行 → 返回 false 且不重建新任务，
+        // 避免同一 FAILED 任务在卡死场景下被反复补偿造成任务与 MQ 消息无界累积。
+        AiTask oldTask = reportTask(TaskStatus.FAILED, "t-old");
+        when(sessionMapper.selectById(88L)).thenReturn(session());
+        when(aiTaskMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(0);
+
+        boolean compensated = service.compensateReportTask(oldTask);
+
+        assertThat(compensated).isFalse();
         verify(aiTaskMapper, never()).insert(any(AiTask.class));
         verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
     }

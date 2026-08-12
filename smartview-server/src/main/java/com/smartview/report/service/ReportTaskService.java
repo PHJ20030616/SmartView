@@ -239,8 +239,10 @@ public class ReportTaskService {
     /**
      * MQ 投递失败时将任务收口为 FAILED，报告与会话状态保持不变。
      *
-     * 与画像分析一致不设独立补偿调度器；会话已进入 REPORTING，报告行保留 GENERATING，
-     * 由后续人工/运维按 DLQ 与 ai_task 记录恢复。
+     * 投递失败任务刻意不写 finished_at（保持 NULL）：以此作为"等待补偿"标记，使
+     * ReportGenerateRetryScheduler 的扫描谓词（FAILED 且 finished_at IS NULL）能命中并
+     * 重建新任务；只有被补偿调度退休或结果消费失败（handleResult/markResultHandlingFailed）
+     * 的任务才写 finished_at 退出可恢复集。
      *
      * 本方法常在 schedulePublishAfterCommit 的 afterCommit 回调中执行：此时外层事务已
      * doCommit 但尚未 cleanupAfterCompletion，isSynchronizationActive() 仍为 true、连接仍
@@ -266,7 +268,7 @@ public class ReportTaskService {
             }
             task.setTaskStatus(TaskStatus.FAILED.getCode());
             task.setErrorMessage(errorMessage);
-            task.setFinishedAt(LocalDateTime.now());
+            // 不写 finished_at：保持"等待补偿"标记（finished_at IS NULL），由补偿调度重建恢复。
             aiTaskMapper.updateById(task);
         });
     }
@@ -275,37 +277,48 @@ public class ReportTaskService {
      * 补偿调度重建报告生成任务：退休旧任务并创建新 taskId 补偿任务。
      *
      * 仅当会话仍处于 REPORTING 时执行（报告已成功/失败、会话已 COMPLETED 则跳过）。
-     * 用条件更新抢占式退休旧任务（task_status<>SUCCESS 才退休），防止并发调度重复补偿
-     * 与旧任务迟到结果污染新任务；旧任务置 FAILED 后其迟到结果会被 handleResult 按终态忽略。
+     * 采用租约抢占：条件更新绑定"观测到的 task_status + finished_at IS NULL（等待补偿标记）"，
+     * 并发调度实例中只有一个能命中；退休时把 finished_at 置当前时间，使旧任务退出可恢复集
+     * （扫描谓词 finished_at IS NULL 不再命中），避免下一轮扫描重复补偿导致任务与 MQ 消息
+     * 无界累积。旧任务置 FAILED 后其迟到结果会被 handleResult 按终态忽略。
+     *
+     * @return true=本次实际完成补偿（已退休旧任务并重建新任务）；false=未补偿（会话已离开
+     *         报告阶段，或租约已被其他实例抢占/任务已不满足租约），供调度器准确统计。
      */
     @Transactional(rollbackFor = Exception.class)
-    public void compensateReportTask(AiTask oldTask) {
+    public boolean compensateReportTask(AiTask oldTask) {
         Long sessionId = oldTask.getBizId();
         if (sessionId == null) {
-            return;
+            return false;
         }
         InterviewSession session = sessionMapper.selectById(sessionId);
         if (session == null
                 || !InterviewSessionStatus.REPORTING.getCode().equals(session.getStatus())) {
             log.info("会话已离开报告阶段，跳过补偿，sessionId={}, status={}",
                     sessionId, session == null ? "会话不存在" : session.getStatus());
-            return;
+            return false;
         }
+        // 租约抢占：绑定观测到的 task_status + finished_at IS NULL（等待补偿标记）。
+        // 只有第一个调度实例能命中；退休后 finished_at 置当前时间，旧任务退出可恢复集，
+        // 避免下一轮扫描重复补偿（也天然串行化并发调度实例）。
         int retired = aiTaskMapper.update(null, new UpdateWrapper<AiTask>()
                 .eq("task_id", oldTask.getTaskId())
-                .apply("task_status <> {0}", TaskStatus.SUCCESS.getCode())
+                .eq("task_status", oldTask.getTaskStatus())
+                .apply("finished_at IS NULL")
                 .set("task_status", TaskStatus.FAILED.getCode())
                 .set("error_message", "已由补偿调度重建，见同会话新任务")
                 .set("finished_at", LocalDateTime.now())
                 .set("updated_at", LocalDateTime.now()));
         if (retired == 0) {
-            // 已被其他调度实例抢占或已成功，跳过避免重复补偿。
-            log.info("旧报告任务已被抢占或已成功，跳过补偿，taskId={}", oldTask.getTaskId());
-            return;
+            // 已被其他调度实例抢占或已不满足租约，跳过避免重复补偿。
+            log.info("旧报告任务已被其他实例抢占或已不满足租约，跳过补偿，taskId={}",
+                    oldTask.getTaskId());
+            return false;
         }
         AiTask newTask = buildTask(session);
         aiTaskMapper.insert(newTask);
         schedulePublishAfterCommit(newTask, sessionId);
+        return true;
     }
 
     /**

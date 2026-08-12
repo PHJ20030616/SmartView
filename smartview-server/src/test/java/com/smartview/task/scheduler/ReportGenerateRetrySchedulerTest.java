@@ -71,6 +71,7 @@ class ReportGenerateRetrySchedulerTest {
         AiTask stalePending = reportTask(TaskStatus.PENDING, "t-stale");
         stalePending.setUpdatedAt(LocalDateTime.now().minusMinutes(10));
         when(aiTaskMapper.selectList(any())).thenReturn(List.of(failed, stalePending));
+        when(reportTaskService.compensateReportTask(any())).thenReturn(true);
 
         scheduler.retryStuckReportTasks();
 
@@ -78,7 +79,8 @@ class ReportGenerateRetrySchedulerTest {
         verify(reportTaskService).compensateReportTask(failed);
         verify(reportTaskService).compensateReportTask(stalePending);
 
-        // 扫描条件必须覆盖 FAILED 与在途任务，并带租约阈值（列名在 SQL 段，取值在参数表）。
+        // 扫描条件必须覆盖 FAILED（finished_at IS NULL 租约）与在途任务（updated_at 租约），
+        // 退休后旧任务 finished_at 已置位不再被下一轮扫描选中（列名在 SQL 段，取值在参数表）。
         ArgumentCaptor<LambdaQueryWrapper<AiTask>> wrapperCaptor =
                 ArgumentCaptor.forClass(LambdaQueryWrapper.class);
         verify(aiTaskMapper).selectList(wrapperCaptor.capture());
@@ -88,6 +90,7 @@ class ReportGenerateRetrySchedulerTest {
                 .contains("biz_type")
                 .contains("task_status")
                 .contains("updated_at")
+                .contains("finished_at")
                 .contains("ORDER BY created_at ASC")
                 .contains("LIMIT 100");
         assertThat(wrapperCaptor.getValue().getParamNameValuePairs().values())
@@ -95,6 +98,21 @@ class ReportGenerateRetrySchedulerTest {
                 .contains(BizType.INTERVIEW_SESSION.getCode())
                 .contains(TaskStatus.FAILED.getCode())
                 .contains(TaskStatus.RETRYING.getCode());
+    }
+
+    @Test
+    void queryRecoverableTasks_excludesFailedTasksWithFinishedAtSet() {
+        // 租约生效：FAILED 且 finished_at 已置位（已退休/已终态）的任务不应被扫描选中，
+        // 否则退休后的旧任务在卡死场景下被反复选中、无界重建。selectList 为 Mockito mock，
+        // 查询谓词即为权威，故以 SQL 含 finished_at IS NULL 租约作为验证点。
+        when(aiTaskMapper.selectList(any())).thenReturn(List.of());
+
+        scheduler.retryStuckReportTasks();
+
+        ArgumentCaptor<LambdaQueryWrapper<AiTask>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(aiTaskMapper).selectList(wrapperCaptor.capture());
+        assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("finished_at");
     }
 
     @Test

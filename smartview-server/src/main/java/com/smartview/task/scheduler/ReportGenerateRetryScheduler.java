@@ -19,10 +19,12 @@ import java.util.List;
  * 报告生成任务补偿调度器。
  *
  * <p>会话进入 REPORTING 后报告任务经 afterCommit 投递 MQ，进程可能在提交与投递之间退出，
- * 或 MQ 投递失败被 markDispatchFailed 收口为 FAILED：此时会话停留在 REPORTING、报告停留
- * GENERATING，无任何下游可推进。此调度器以 ai_task 为权威，扫描这类"卡住"的
- * REPORT_GENERATE 任务，交给 ReportTaskService 重建新 taskId 补偿任务并重投 MQ。
- * 任务重建的幂等与并发安全由 compensateReportTask 的条件更新退休保证。</p>
+ * 或 MQ 投递失败被 markDispatchFailed 收口为 FAILED（finished_at 保持 NULL 等待补偿）：此时
+ * 会话停留在 REPORTING、报告停留 GENERATING，无任何下游可推进。此调度器以 ai_task 为权威，
+ * 扫描这类"卡住"的 REPORT_GENERATE 任务，交给 ReportTaskService 重建新 taskId 补偿任务并
+ * 重投 MQ。任务重建的幂等与并发安全由 compensateReportTask 的租约条件更新退休保证：投递失败
+ * 任务（FAILED 且 finished_at IS NULL）才进入可恢复集，退休时写 finished_at 退出，避免旧任务
+ * 被反复重建导致任务与 MQ 消息无界累积。</p>
  */
 @Slf4j
 @Component
@@ -42,8 +44,10 @@ public class ReportGenerateRetryScheduler {
     }
 
     /**
-     * 补偿扫描：找出投递失败（FAILED）或超过租约仍在途（PENDING/PROCESSING/RETRYING 且
-     * updated_at 早于阈值）的 REPORT_GENERATE 任务，交给 ReportTaskService 重建补偿任务。
+     * 补偿扫描：找出投递失败且仍在可恢复集（FAILED 且 finished_at IS NULL）或超过租约仍在途
+     * （PENDING/PROCESSING/RETRYING 且 updated_at 早于阈值、finished_at IS NULL）的
+     * REPORT_GENERATE 任务，交给 ReportTaskService 重建补偿任务；以 compensateReportTask
+     * 返回值为准统计实际补偿数。
      */
     @Scheduled(
             fixedDelayString = "#{${smartview.resume.mq.scheduled-retry-interval-minutes:5} * 60 * 1000}",
@@ -58,8 +62,13 @@ public class ReportGenerateRetryScheduler {
         int skipped = 0;
         for (AiTask task : tasks) {
             try {
-                reportTaskService.compensateReportTask(task);
-                recovered++;
+                // 以返回值区分实际补偿与跳过：true 计入 recovered，false（租约未命中/会话已
+                // 离开报告阶段）计入 skipped，保证统计与实际重建数一致。
+                if (reportTaskService.compensateReportTask(task)) {
+                    recovered++;
+                } else {
+                    skipped++;
+                }
             } catch (Exception exception) {
                 skipped++;
                 log.error("报告任务补偿异常，taskId={}", task.getTaskId(), exception);
@@ -74,13 +83,16 @@ public class ReportGenerateRetryScheduler {
                 .eq(AiTask::getTaskType, TaskType.REPORT_GENERATE.getCode())
                 .eq(AiTask::getBizType, BizType.INTERVIEW_SESSION.getCode())
                 .and(wrapper -> wrapper
-                        .eq(AiTask::getTaskStatus, TaskStatus.FAILED.getCode())
+                        .and(nested -> nested
+                                .eq(AiTask::getTaskStatus, TaskStatus.FAILED.getCode())
+                                .apply("finished_at IS NULL"))
                         .or(nested -> nested
                                 .in(AiTask::getTaskStatus,
                                         TaskStatus.PENDING.getCode(),
                                         TaskStatus.PROCESSING.getCode(),
                                         TaskStatus.RETRYING.getCode())
-                                .apply("(updated_at IS NULL OR updated_at <= {0})", staleCutoff)))
+                                .apply("(updated_at IS NULL OR updated_at <= {0})", staleCutoff)
+                                .apply("finished_at IS NULL")))
                 .orderByAsc(AiTask::getCreatedAt)
                 .last("LIMIT 100"));
     }
