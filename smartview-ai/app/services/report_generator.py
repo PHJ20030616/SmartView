@@ -137,18 +137,31 @@ class ReportNarrativeGenerator:
         try:
             return self._validate(raw)
         except ValueError as exc:
-            # schema 校验失败做一次带上下文的修复调用，仍失败抛 AppError 交由 worker 重试。
+            # schema 校验失败做一次带上下文的修复调用。
             repaired = await call_deepseek_json(
                 prompt, self.settings, what="报告评语", repair_error=str(exc)
             )
-            return self._validate(repaired)
+            try:
+                return self._validate(repaired)
+            except ValueError as exc2:
+                # 修复调用后仍校验失败 → 抛 AppError 作为确定性终态：Task 10 worker
+                # 按 AppError.code 识别，不再重试（区别于未预期异常走"有界重试"）。
+                raise AppError(
+                    "AI 生成的报告评语校验失败",
+                    code="REPORT_LLM_VALIDATION_FAILED",
+                ) from exc2
 
     def _validate(self, raw: dict[str, Any]) -> dict[str, Any]:
         for field in ("summary", "strengths", "weaknesses", "riskPoints", "suggestions"):
             if not raw.get(field):
                 raise ValueError(f"报告评语缺少字段 {field}")
-        if not isinstance(raw["strengths"], list) or not isinstance(raw["weaknesses"], list):
-            raise ValueError("报告评语 strengths/weaknesses 必须为数组")
+        # 数组字段统一做 isinstance 校验：非 list 的"真值"（如字符串/对象）能绕过
+        # 上面的空值检查，若不拦截会在构造 ReportGenerateResult 时抛未捕获的
+        # Pydantic ValidationError（strengths/weaknesses/riskPoints 为 string[]，
+        # suggestions 为 object[]，均必须是 list）。
+        for field in ("strengths", "weaknesses", "riskPoints", "suggestions"):
+            if not isinstance(raw[field], list):
+                raise ValueError(f"报告评语 {field} 必须为数组")
         return raw
 
     @staticmethod
@@ -196,10 +209,19 @@ class ReferenceAnswerGenerator:
         try:
             items = self._validate(raw, stage_by_question)
         except ValueError as exc:
+            # schema 校验失败做一次带上下文的修复调用。
             repaired = await call_deepseek_json(
                 prompt, self.settings, what="参考答案", repair_error=str(exc)
             )
-            items = self._validate(repaired, stage_by_question)
+            try:
+                items = self._validate(repaired, stage_by_question)
+            except ValueError as exc2:
+                # 修复调用后仍校验失败 → 抛 AppError 作为确定性终态：Task 10 worker
+                # 按 AppError.code 识别，不再重试（与 ReportNarrativeGenerator 保持一致）。
+                raise AppError(
+                    "AI 生成的参考答案校验失败",
+                    code="REPORT_REFERENCE_VALIDATION_FAILED",
+                ) from exc2
         return items
 
     def _validate(

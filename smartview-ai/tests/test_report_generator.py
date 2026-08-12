@@ -12,6 +12,7 @@ from app.services.report_generator import (
     ANSWER_TYPE_BY_STAGE,
     ReferenceAnswerGenerator,
     ReportGenerator,
+    ReportNarrativeGenerator,
     ReportScorer,
 )
 
@@ -115,6 +116,33 @@ def test_answer_type_mapped_by_stage_deterministically(monkeypatch) -> None:
         "BASIC_KEY_POINTS", "PROJECT_STRUCTURE", "SCENARIO_FRAMEWORK"
     ]
     assert ANSWER_TYPE_BY_STAGE["BASIC"] == "BASIC_KEY_POINTS"
+
+
+# ==================== ReportNarrativeGenerator ====================
+
+def test_narrative_second_validation_failure_raises_app_error(monkeypatch) -> None:
+    """报告评语首次校验失败、修复调用后仍缺字段 → 抛 AppError 终态码。
+
+    monkeypatch 替换的是模块级函数 call_deepseek_json（非类方法，fake 无需 self），
+    签名与真实函数一致以承接第二次调用携带的 repair_error 关键字参数。
+    """
+    incomplete = {"summary": "总体评价"}  # 缺 strengths/weaknesses/riskPoints/suggestions
+    calls: list[str | None] = []
+
+    async def fake_call(messages, settings, *, what="报告评语", repair_error=None):
+        # 两次调用均返回缺字段 payload：首次 _validate 失败触发带修复上下文的二次调用，
+        # 修复后仍校验失败 → generate 抛 AppError（确定性终态，worker 不再重试）。
+        calls.append(repair_error)
+        return incomplete
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(ReportNarrativeGenerator().generate({}))
+    # 首次调用无修复上下文、修复调用携带首次校验错误 → 证明修复路径确实被走到
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] is not None
+    assert excinfo.value.code == "REPORT_LLM_VALIDATION_FAILED"
 
 
 # ==================== ReportGenerator ====================
