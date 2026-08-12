@@ -32,6 +32,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -97,6 +98,10 @@ public class ReportTaskService {
         this.objectMapper = objectMapper;
         this.schemaValidator = schemaValidator;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // 必须在 afterCommit 回调中也能独立提交：默认 REQUIRED 会加入已提交的"幻影事务"，
+        // isNewTransaction=false 导致 UPDATE 不落库被回滚（详情见 markDispatchFailed javadoc）。
+        this.transactionTemplate.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -203,6 +208,8 @@ public class ReportTaskService {
         if (TaskStatus.SUCCESS.getCode().equals(task.getTaskStatus())
                 || TaskStatus.FAILED.getCode().equals(task.getTaskStatus())) {
             // 终态任务的重复结果只记录并忽略，避免迟到消息覆盖审计数据。
+            log.info("报告生成任务已终态，忽略重复结果，taskId={}, status={}",
+                    task.getTaskId(), task.getTaskStatus());
             return;
         }
 
@@ -236,6 +243,13 @@ public class ReportTaskService {
      *
      * 与画像分析一致不设独立补偿调度器；会话已进入 REPORTING，报告行保留 GENERATING，
      * 由后续人工/运维按 DLQ 与 ai_task 记录恢复。
+     *
+     * 本方法常在 schedulePublishAfterCommit 的 afterCommit 回调中执行：此时外层事务已
+     * doCommit 但尚未 cleanupAfterCompletion，isSynchronizationActive() 仍为 true、连接仍
+     * 绑定在 ThreadLocal 且 isTransactionActive() 仍为 true，REQUIRED 会把当前模板加入这个
+     * 已提交的"幻影事务"，isNewTransaction=false 导致模板 commit() 不执行 doCommit，UPDATE
+     * 最终随连接清理被回滚而静默丢失。因此事务模板强制 REQUIRES_NEW，确保在 afterCommit
+     * 回调中独立开启并提交新事务，FAILED 更新真正落库。
      */
     public void markDispatchFailed(String taskId, String errorMessage) {
         if (transactionTemplate == null) {
