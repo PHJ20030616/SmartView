@@ -61,6 +61,15 @@ public class SchemaValidator {
      */
     private JsonSchema profileAnalyzeResultSchema;
 
+    /**
+     * 报告生成结果 Schema，启动时强制加载。
+     *
+     * 结果消息是 AI 报告生成任务（report_generate_task）的终态载体，
+     * 成功时携带完整报告内容（得分、建议、参考答案等）供落库消费，
+     * 必须先通过契约校验，避免字段缺失或格式错误污染报告数据。
+     */
+    private JsonSchema reportGenerateResultSchema;
+
     public SchemaValidator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -95,7 +104,13 @@ public class SchemaValidator {
                     "无法加载 profile_analyze_result.schema.json，"
                             + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
         }
-        log.info("resume_parse_result、resume_vectorize_result 和 profile_analyze_result Schema 加载成功");
+        reportGenerateResultSchema = loadSchema("/contracts/mq/report_generate_result.schema.json");
+        if (reportGenerateResultSchema == null) {
+            throw new IllegalStateException(
+                    "无法加载 report_generate_result.schema.json，"
+                            + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
+        }
+        log.info("resume_parse_result、resume_vectorize_result、profile_analyze_result 和 report_generate_result Schema 加载成功");
     }
 
     /**
@@ -128,6 +143,16 @@ public class SchemaValidator {
      */
     public void validateProfileAnalyzeResult(Object message) {
         validate(message, profileAnalyzeResultSchema);
+    }
+
+    /**
+     * 校验报告生成结果消息是否符合契约定义。
+     *
+     * @param message 待校验的消息对象
+     * @throws IllegalArgumentException 校验失败时抛出
+     */
+    public void validateReportGenerateResult(Object message) {
+        validate(message, reportGenerateResultSchema);
     }
 
     /**

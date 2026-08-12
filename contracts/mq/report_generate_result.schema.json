@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ReportGenerateResult",
-  "description": "报告生成结果消息",
+  "description": "报告生成结果消息（envelope + 完整报告内容，success=true 时内容必需）",
   "type": "object",
   "required": [
     "taskId",
@@ -14,52 +14,83 @@
     "success"
   ],
   "properties": {
-    "taskId": {
-      "type": "string",
-      "format": "uuid",
-      "description": "任务唯一标识"
+    "taskId": { "type": "string", "format": "uuid", "description": "任务唯一标识" },
+    "traceId": { "type": "string", "format": "uuid", "description": "链路追踪 ID" },
+    "messageType": { "type": "string", "enum": ["REPORT_GENERATE_RESULT"], "description": "消息类型" },
+    "schemaVersion": { "type": "string", "enum": ["1.0.0"], "description": "Schema 版本号" },
+    "retryCount": { "type": "integer", "minimum": 0, "maximum": 3, "description": "当前重试次数" },
+    "createdAt": { "type": "string", "format": "date-time", "description": "消息创建时间" },
+    "sessionId": { "type": "string", "description": "面试会话 ID" },
+    "success": { "type": "boolean", "description": "报告生成是否成功" },
+    "reportId": { "type": "string", "description": "生成的报告 ID（success=true 时必需）" },
+    "overallScore": { "type": "integer", "minimum": 0, "maximum": 100, "description": "综合得分" },
+    "readinessLevel": { "type": "string", "enum": ["NOT_READY", "NEEDS_PRACTICE", "READY", "WELL_PREPARED"], "description": "面试准备度等级" },
+    "roleFitScore": { "type": "integer", "minimum": 0, "maximum": 100, "description": "岗位匹配度得分" },
+    "summary": { "type": "string", "description": "总体评价" },
+    "strengths": { "type": "array", "description": "优势点", "items": { "type": "string" } },
+    "weaknesses": { "type": "array", "description": "薄弱点", "items": { "type": "string" } },
+    "riskPoints": { "type": "array", "description": "风险点", "items": { "type": "string" } },
+    "suggestions": {
+      "type": "array",
+      "description": "学习建议",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": { "type": "string" },
+          "reason": { "type": "string" },
+          "resources": { "type": "array", "items": { "type": "string" } }
+        }
+      }
     },
-    "traceId": {
-      "type": "string",
-      "format": "uuid",
-      "description": "链路追踪 ID"
+    "coverage": {
+      "type": "object",
+      "description": "覆盖情况",
+      "properties": {
+        "basicCoverage": { "type": "number" },
+        "projectCoverage": { "type": "number" },
+        "scenarioCoverage": { "type": "number" }
+      }
     },
-    "messageType": {
-      "type": "string",
-      "enum": ["REPORT_GENERATE_RESULT"],
-      "description": "消息类型"
+    "referenceAnswers": {
+      "type": "array",
+      "description": "每题参考答案",
+      "items": {
+        "type": "object",
+        "required": ["questionId", "answerType", "referenceContent"],
+        "properties": {
+          "questionId": { "type": "string", "description": "问题 ID" },
+          "answerType": { "type": "string", "enum": ["BASIC_KEY_POINTS", "PROJECT_STRUCTURE", "SCENARIO_FRAMEWORK"], "description": "答案类型" },
+          "referenceContent": { "type": "string", "description": "参考答案正文" },
+          "keyPoints": { "type": "array", "description": "关键要点", "items": { "type": "string" } },
+          "tradeoffs": {
+            "type": "array",
+            "description": "场景题权衡点",
+            "items": {
+              "type": "object",
+              "properties": {
+                "aspect": { "type": "string" },
+                "options": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
     },
-    "schemaVersion": {
-      "type": "string",
-      "enum": ["1.0.0"],
-      "description": "Schema 版本号"
+    "errorMessage": { "type": "string", "description": "生成失败原因，success=false 时必需" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "success": { "const": true } } },
+      "then": {
+        "required": [
+          "reportId", "overallScore", "readinessLevel", "roleFitScore", "summary",
+          "strengths", "weaknesses", "riskPoints", "suggestions", "coverage", "referenceAnswers"
+        ]
+      }
     },
-    "retryCount": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 3,
-      "description": "当前重试次数"
-    },
-    "createdAt": {
-      "type": "string",
-      "format": "date-time",
-      "description": "消息创建时间"
-    },
-    "sessionId": {
-      "type": "string",
-      "description": "面试会话 ID"
-    },
-    "success": {
-      "type": "boolean",
-      "description": "报告生成是否成功"
-    },
-    "reportId": {
-      "type": "string",
-      "description": "生成的报告 ID"
-    },
-    "errorMessage": {
-      "type": "string",
-      "description": "报告生成失败原因，success=false 时必需"
+    {
+      "if": { "properties": { "success": { "const": false } } },
+      "then": { "required": ["errorMessage"] }
     }
-  }
+  ]
 }
