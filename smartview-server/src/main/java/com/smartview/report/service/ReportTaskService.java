@@ -2,6 +2,7 @@ package com.smartview.report.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -268,6 +269,43 @@ public class ReportTaskService {
             task.setFinishedAt(LocalDateTime.now());
             aiTaskMapper.updateById(task);
         });
+    }
+
+    /**
+     * 补偿调度重建报告生成任务：退休旧任务并创建新 taskId 补偿任务。
+     *
+     * 仅当会话仍处于 REPORTING 时执行（报告已成功/失败、会话已 COMPLETED 则跳过）。
+     * 用条件更新抢占式退休旧任务（task_status<>SUCCESS 才退休），防止并发调度重复补偿
+     * 与旧任务迟到结果污染新任务；旧任务置 FAILED 后其迟到结果会被 handleResult 按终态忽略。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void compensateReportTask(AiTask oldTask) {
+        Long sessionId = oldTask.getBizId();
+        if (sessionId == null) {
+            return;
+        }
+        InterviewSession session = sessionMapper.selectById(sessionId);
+        if (session == null
+                || !InterviewSessionStatus.REPORTING.getCode().equals(session.getStatus())) {
+            log.info("会话已离开报告阶段，跳过补偿，sessionId={}, status={}",
+                    sessionId, session == null ? "会话不存在" : session.getStatus());
+            return;
+        }
+        int retired = aiTaskMapper.update(null, new UpdateWrapper<AiTask>()
+                .eq("task_id", oldTask.getTaskId())
+                .apply("task_status <> {0}", TaskStatus.SUCCESS.getCode())
+                .set("task_status", TaskStatus.FAILED.getCode())
+                .set("error_message", "已由补偿调度重建，见同会话新任务")
+                .set("finished_at", LocalDateTime.now())
+                .set("updated_at", LocalDateTime.now()));
+        if (retired == 0) {
+            // 已被其他调度实例抢占或已成功，跳过避免重复补偿。
+            log.info("旧报告任务已被抢占或已成功，跳过补偿，taskId={}", oldTask.getTaskId());
+            return;
+        }
+        AiTask newTask = buildTask(session);
+        aiTaskMapper.insert(newTask);
+        schedulePublishAfterCommit(newTask, sessionId);
     }
 
     /**

@@ -2,6 +2,7 @@ package com.smartview.report.service;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -302,5 +304,55 @@ class ReportTaskServiceTest {
         assertThatThrownBy(() -> service.handleResult(resultMessage(true)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("面试报告不存在");
+    }
+
+    // ==================== compensateReportTask ====================
+
+    @Test
+    void compensateReportTask_retiresOldTaskAndCreatesNewTaskWhenSessionReporting() {
+        AiTask oldTask = reportTask(TaskStatus.FAILED, "t-old");
+        when(sessionMapper.selectById(88L)).thenReturn(session());
+        when(aiTaskMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(1);
+        when(producer.sendWithRetry(any(), anyInt(), anyLong())).thenReturn(true);
+
+        service.compensateReportTask(oldTask);
+
+        // 条件更新退休旧任务 → 插入新 taskId 补偿任务 → 事务提交后重投 MQ。
+        verify(aiTaskMapper).update(isNull(), any(UpdateWrapper.class));
+        ArgumentCaptor<AiTask> taskCaptor = ArgumentCaptor.forClass(AiTask.class);
+        verify(aiTaskMapper).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getTaskType())
+                .isEqualTo(TaskType.REPORT_GENERATE.getCode());
+        assertThat(taskCaptor.getValue().getTaskStatus()).isEqualTo(TaskStatus.PENDING.getCode());
+        assertThat(taskCaptor.getValue().getBizId()).isEqualTo(88L);
+        assertThat(taskCaptor.getValue().getTaskId()).isNotEqualTo("t-old");
+        verify(producer).sendWithRetry(any(), anyInt(), anyLong());
+    }
+
+    @Test
+    void compensateReportTask_skipsWhenSessionNotReporting() {
+        AiTask oldTask = reportTask(TaskStatus.FAILED, "t-old");
+        InterviewSession completed = session();
+        completed.setStatus(InterviewSessionStatus.COMPLETED.getCode());
+        when(sessionMapper.selectById(88L)).thenReturn(completed);
+
+        service.compensateReportTask(oldTask);
+
+        verify(aiTaskMapper, never()).update(isNull(), any(UpdateWrapper.class));
+        verify(aiTaskMapper, never()).insert(any(AiTask.class));
+        verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
+    }
+
+    @Test
+    void compensateReportTask_skipsWhenOldTaskAlreadySucceededOrTakenOver() {
+        AiTask oldTask = reportTask(TaskStatus.SUCCESS, "t-old");
+        when(sessionMapper.selectById(88L)).thenReturn(session());
+        // 条件更新退休影响 0 行（task_status 已 SUCCESS 或已被其他实例抢占）→ 不再重建。
+        when(aiTaskMapper.update(isNull(), any(UpdateWrapper.class))).thenReturn(0);
+
+        service.compensateReportTask(oldTask);
+
+        verify(aiTaskMapper, never()).insert(any(AiTask.class));
+        verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
     }
 }
