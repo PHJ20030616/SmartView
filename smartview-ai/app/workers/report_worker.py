@@ -50,11 +50,6 @@ def _extract_message_trace_id(body: bytes) -> str:
     return "-"
 
 
-def _serialize_result(result: ReportGenerateResult) -> dict[str, Any]:
-    """序列化为可直接发布到 RabbitMQ 的 JSON 数据（content 由 worker 回填）。"""
-    return result.model_dump(mode="json", exclude_none=True)
-
-
 def build_amqp_url(settings: Settings) -> str:
     """根据拆分配置构造 AMQP URL，正确转义特殊字符。"""
     username = quote(settings.rabbitmq_username, safe="")

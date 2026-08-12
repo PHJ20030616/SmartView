@@ -97,6 +97,13 @@ def test_successful_report_is_published_and_acked(monkeypatch) -> None:
     assert published[0]["reportId"] == "5"
     assert published[0]["overallScore"] == 72
     assert published[0]["referenceAnswers"][0]["questionId"] == "10"
+    # 钉住真实信封字段（对照 _task_payload 的取值），防止合并顺序回归：内容展开
+    # 必须在信封字段之前，否则 taskId/traceId/sessionId 会被 ReportGenerateResult
+    # 的占位默认值覆盖，导致 Spring 无法按任务关联结果。
+    assert published[0]["sessionId"] == "88"
+    assert published[0]["taskId"] == "00000000-0000-0000-0000-000000000501"
+    assert published[0]["traceId"] == "00000000-0000-0000-0000-000000000051"
+    assert published[0]["retryCount"] == 0
     assert task_published == []
 
 

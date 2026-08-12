@@ -252,6 +252,20 @@ class ReferenceAnswerGenerator:
                     "tradeoffs": item.get("tradeoffs") or [],
                 }
             )
+        # 终态校验：参考答案必须覆盖本会话全部已答题，缺一不可（验收标准
+        # "每道 ANSWERED 题有参考答案"）。同时拒绝重复题与越权/外部 questionId，
+        # 否则 generate 抛 ValueError → 走一次带上下文的修复调用，仍失败则抛
+        # AppError 终态码，保证落库的 reference_answer 与已答题一一对应。
+        returned_ids = [item["questionId"] for item in result]
+        if len(returned_ids) != len(set(returned_ids)):
+            raise ValueError("参考答案存在重复的 questionId")
+        answered_ids = set(stage_by_question.keys())
+        invalid_ids = set(returned_ids) - answered_ids
+        if invalid_ids:
+            raise ValueError(f"参考答案包含非本会话已答题: {sorted(invalid_ids)}")
+        if set(returned_ids) != answered_ids:
+            missing_ids = sorted(answered_ids - set(returned_ids))
+            raise ValueError(f"参考答案未覆盖全部已答题，缺少: {missing_ids}")
         return result
 
     @staticmethod

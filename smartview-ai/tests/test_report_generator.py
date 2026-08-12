@@ -118,6 +118,83 @@ def test_answer_type_mapped_by_stage_deterministically(monkeypatch) -> None:
     assert ANSWER_TYPE_BY_STAGE["BASIC"] == "BASIC_KEY_POINTS"
 
 
+def test_reference_answers_missing_question_raises_validation_error() -> None:
+    """多题场景 LLM 缺失 1 题参考答案 → _validate 抛 ValueError（触发修复调用）。
+
+    验收标准"每道 ANSWERED 题有参考答案"：参考答案必须覆盖全部已答题，缺一不可。
+    这里 3 题已答、LLM 只返回 2 题，直接调用 _validate 校验遗漏即抛错。
+    """
+    stage_by = {"1": "BASIC", "2": "PROJECT", "3": "SCENARIO"}
+    raw = {
+        "referenceAnswers": [
+            {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
+            {"questionId": "2", "referenceContent": "内容2", "keyPoints": [], "tradeoffs": []},
+        ]
+    }
+    with pytest.raises(ValueError, match="未覆盖全部已答题"):
+        ReferenceAnswerGenerator()._validate(raw, stage_by)
+
+
+def test_reference_answers_missing_question_raises_app_error(monkeypatch) -> None:
+    """修复调用后仍缺失 1 题参考答案 → 抛 AppError 终态码（worker 不再重试）。"""
+    questions = [
+        {"question_id": "1", "question_text": "Q1", "stage": "BASIC"},
+        {"question_id": "2", "question_text": "Q2", "stage": "PROJECT"},
+        {"question_id": "3", "question_text": "Q3", "stage": "SCENARIO"},
+    ]
+    stage_by = {"1": "BASIC", "2": "PROJECT", "3": "SCENARIO"}
+    # 两次调用均返回缺第 3 题参考答案的 payload：首次 _validate 失败触发修复调用，
+    # 修复后仍缺题 → generate 抛 AppError（确定性终态）。
+    incomplete = {
+        "referenceAnswers": [
+            {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
+            {"questionId": "2", "referenceContent": "内容2", "keyPoints": [], "tradeoffs": []},
+        ]
+    }
+    calls: list[str | None] = []
+
+    async def fake_call(messages, settings, *, what="参考答案", repair_error=None):
+        calls.append(repair_error)
+        return incomplete
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(ReferenceAnswerGenerator().generate(questions, stage_by))
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] is not None
+    assert excinfo.value.code == "REPORT_REFERENCE_VALIDATION_FAILED"
+
+
+def test_reference_answers_rejects_outside_and_duplicate_question_ids() -> None:
+    """越权/外部 questionId 与重复 questionId 一律抛 ValueError，拒绝污染落库数据。"""
+    stage_by = {"1": "BASIC", "2": "PROJECT"}
+
+    # 越权：返回了本会话之外的 questionId=99
+    with pytest.raises(ValueError, match="非本会话已答题"):
+        ReferenceAnswerGenerator()._validate(
+            {
+                "referenceAnswers": [
+                    {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
+                    {"questionId": "99", "referenceContent": "越权内容", "keyPoints": [], "tradeoffs": []},
+                ]
+            },
+            stage_by,
+        )
+
+    # 重复：同一题返回两份参考答案
+    with pytest.raises(ValueError, match="重复的 questionId"):
+        ReferenceAnswerGenerator()._validate(
+            {
+                "referenceAnswers": [
+                    {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
+                    {"questionId": "1", "referenceContent": "重复内容", "keyPoints": [], "tradeoffs": []},
+                ]
+            },
+            stage_by,
+        )
+
+
 # ==================== ReportNarrativeGenerator ====================
 
 def test_narrative_second_validation_failure_raises_app_error(monkeypatch) -> None:

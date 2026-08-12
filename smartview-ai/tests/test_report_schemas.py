@@ -2,7 +2,6 @@
 
 import pytest
 from app.schemas.report import ReportGenerateResult
-from app.core.errors import AppError  # noqa: F401  # 仅为类型引用
 
 
 def _result(**overrides: object) -> dict:
