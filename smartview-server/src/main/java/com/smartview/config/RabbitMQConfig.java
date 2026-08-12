@@ -123,6 +123,17 @@ public class RabbitMQConfig {
     private static final String ROUTING_KEY_PROFILE_ANALYZE_RESULT_DLQ =
             "profile.analyze.result.dlq";
 
+    // ==================== 报告生成任务/结果队列 ====================
+
+    public static final String QUEUE_REPORT_GENERATE = "smartview.report.generate.v1";
+    public static final String ROUTING_KEY_REPORT_GENERATE = "report.generate.task";
+    public static final String QUEUE_REPORT_GENERATE_RESULT = "smartview.report.generate.result.v1";
+    public static final String ROUTING_KEY_REPORT_GENERATE_RESULT = "report.generate.result";
+    private static final String QUEUE_REPORT_GENERATE_DLQ = "smartview.report.generate.dlq";
+    private static final String ROUTING_KEY_REPORT_GENERATE_DLQ = "report.generate.task.dlq";
+    private static final String QUEUE_REPORT_GENERATE_RESULT_DLQ = "smartview.report.generate.result.dlq";
+    private static final String ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ = "report.generate.result.dlq";
+
     /**
      * 最大处理次数（首次消费 + 3 次重试 = 共 4 次机会）
      * SimpleRetryPolicy.setMaxAttempts 表示总尝试次数，包含首次消费
@@ -257,6 +268,61 @@ public class RabbitMQConfig {
                 .bind(profileAnalyzeResultQueue())
                 .to(smartviewDirectExchange())
                 .with(ROUTING_KEY_PROFILE_ANALYZE_RESULT);
+    }
+
+    @Bean
+    public Queue reportGenerateQueue() {
+        // 任务队列重试耗尽进入 DLQ，供后续补偿调度依据 ai_task 租约再次投递。
+        return QueueBuilder.durable(QUEUE_REPORT_GENERATE)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_REPORT_GENERATE_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding reportGenerateBinding() {
+        return BindingBuilder.bind(reportGenerateQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE);
+    }
+
+    @Bean
+    public Queue reportGenerateResultQueue() {
+        return QueueBuilder.durable(QUEUE_REPORT_GENERATE_RESULT)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding reportGenerateResultBinding() {
+        return BindingBuilder.bind(reportGenerateResultQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE_RESULT);
+    }
+
+    @Bean
+    public Queue reportGenerateDlq() {
+        return new Queue(QUEUE_REPORT_GENERATE_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding reportGenerateDlqBinding() {
+        return BindingBuilder.bind(reportGenerateDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE_DLQ);
+    }
+
+    @Bean
+    public Queue reportGenerateResultDlq() {
+        return new Queue(QUEUE_REPORT_GENERATE_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding reportGenerateResultDlqBinding() {
+        return BindingBuilder.bind(reportGenerateResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ);
     }
 
     // ==================== 任务/结果死信队列 ====================
