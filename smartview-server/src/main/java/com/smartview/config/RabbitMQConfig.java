@@ -301,30 +301,6 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_REPORT_GENERATE_RESULT);
     }
 
-    @Bean
-    public Queue reportGenerateDlq() {
-        return new Queue(QUEUE_REPORT_GENERATE_DLQ, true, false, false);
-    }
-
-    @Bean
-    public Binding reportGenerateDlqBinding() {
-        return BindingBuilder.bind(reportGenerateDlq())
-                .to(deadLetterExchange())
-                .with(ROUTING_KEY_REPORT_GENERATE_DLQ);
-    }
-
-    @Bean
-    public Queue reportGenerateResultDlq() {
-        return new Queue(QUEUE_REPORT_GENERATE_RESULT_DLQ, true, false, false);
-    }
-
-    @Bean
-    public Binding reportGenerateResultDlqBinding() {
-        return BindingBuilder.bind(reportGenerateResultDlq())
-                .to(deadLetterExchange())
-                .with(ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ);
-    }
-
     // ==================== 任务/结果死信队列 ====================
 
     @Bean
@@ -394,6 +370,42 @@ public class RabbitMQConfig {
                 .bind(profileAnalyzeResultDlq())
                 .to(deadLetterExchange())
                 .with(ROUTING_KEY_PROFILE_ANALYZE_RESULT_DLQ);
+    }
+
+    /**
+     * 报告生成任务队列的死信队列。
+     *
+     * 报告生成任务重试耗尽后转入（由任务队列 x-dead-letter-routing-key 路由），
+     * 供后续人工或补偿调度依据 ai_task 租约再次投递。
+     */
+    @Bean
+    public Queue reportGenerateDlq() {
+        return new Queue(QUEUE_REPORT_GENERATE_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding reportGenerateDlqBinding() {
+        return BindingBuilder.bind(reportGenerateDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE_DLQ);
+    }
+
+    /**
+     * 报告生成结果队列的死信队列。
+     *
+     * 结果消息业务校验失败（不可恢复）由消费者 reject 后经 x-dead-letter-routing-key
+     * 路由到此，需人工或定时任务消费/告警，避免前端轮询永久等待生成中。
+     */
+    @Bean
+    public Queue reportGenerateResultDlq() {
+        return new Queue(QUEUE_REPORT_GENERATE_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding reportGenerateResultDlqBinding() {
+        return BindingBuilder.bind(reportGenerateResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ);
     }
 
     // ==================== 消费者容器工厂（带重试拦截器） ====================

@@ -32,8 +32,12 @@ public class ReportResultConsumer {
     @RabbitListener(queues = RabbitMQConfig.QUEUE_REPORT_GENERATE_RESULT)
     public void handleReportGenerateResult(@Payload ReportGenerateResultMessage message) {
         try {
+            // 与 catch 分支一致的三元判空：handleResult 会以 BusinessException 拒绝
+            // null 消息，这里先判空避免日志 NPE 掩盖真实校验错误。
             log.info("收到报告生成结果，taskId={}, sessionId={}, success={}",
-                    message.getTaskId(), message.getSessionId(), message.getSuccess());
+                    message == null ? null : message.getTaskId(),
+                    message == null ? null : message.getSessionId(),
+                    message == null ? null : message.getSuccess());
             reportTaskService.handleResult(message);
         } catch (BusinessException exception) {
             reportTaskService.markResultHandlingFailed(
