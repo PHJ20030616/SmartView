@@ -113,6 +113,17 @@ class Settings(BaseSettings):
         "profile.analyze.task.dlq"
     )
 
+    # 报告生成任务队列/路由键，与 Spring Boot RabbitMQConfig 及 MQ 契约保持一致。
+    rabbitmq_report_generate_queue: str = "smartview.report.generate.v1"
+    rabbitmq_report_generate_routing_key: str = "report.generate.task"
+    rabbitmq_report_generate_result_routing_key: str = "report.generate.result"
+    rabbitmq_report_generate_dead_letter_queue: str = "smartview.report.generate.dlq"
+    rabbitmq_report_generate_dead_letter_routing_key: str = "report.generate.task.dlq"
+    rabbitmq_report_generate_result_dead_letter_queue: str = "smartview.report.generate.result.dlq"
+    rabbitmq_report_generate_result_dead_letter_routing_key: str = (
+        "report.generate.result.dlq"
+    )
+
     # 向量入库依赖：FastAPI 只读取已确认画像，不直接接受前端传入的完整简历。
     # MySQL/RabbitMQ 账号密码等共享凭据统一由 smartview-infra/.env 注入，
     # 这里只保留与 Spring 一致的代码兜底默认值（本地 MySQL 默认创建 root）。
