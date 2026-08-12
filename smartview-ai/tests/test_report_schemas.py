@@ -55,6 +55,7 @@ def test_success_result_requires_full_content() -> None:
         {"reportId": None},
         {"overallScore": None},
         {"strengths": None},
+        {"suggestions": None},
         {"referenceAnswers": None},
     ],
 )

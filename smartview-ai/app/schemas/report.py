@@ -85,6 +85,7 @@ class ReportGenerateResult(BaseModel):
                 or not self.strengths
                 or not self.weaknesses
                 or not self.riskPoints
+                or not self.suggestions
                 or self.coverage is None
                 or not self.referenceAnswers
             ):
