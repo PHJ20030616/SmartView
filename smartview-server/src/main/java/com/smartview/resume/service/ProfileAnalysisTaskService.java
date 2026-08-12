@@ -30,6 +30,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -92,6 +93,10 @@ public class ProfileAnalysisTaskService {
         this.objectMapper = objectMapper;
         this.schemaValidator = schemaValidator;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // 必须在 afterCommit 回调中也能独立提交：默认 REQUIRED 会加入已提交的"幻影事务"，
+        // isNewTransaction=false 导致 UPDATE 不落库被回滚（详情见 markDispatchFailed javadoc）。
+        this.transactionTemplate.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -252,6 +257,12 @@ public class ProfileAnalysisTaskService {
      * 因此不能把任务置为 RETRYING 等待后台重投——那样用户重试会被 isActive
      * 幂等拦截，方向永久卡死。收口为 FAILED 后，ensureTask()/retry() 会创建
      * 新的补偿任务，用户可自助恢复。
+     *
+     * 本方法常在 schedulePublishAfterCommit 的 afterCommit 回调中执行：此时外层事务已
+     * doCommit 但尚未 cleanupAfterCompletion，isSynchronizationActive() 仍为 true、连接仍
+     * 绑定在 ThreadLocal 且 isTransactionActive() 仍为 true，REQUIRED 会把当前模板加入这个
+     * 已提交的"幻影事务"，isNewTransaction=false 导致 UPDATE 不落库被静默回滚。因此构造函数
+     * 中事务模板已强制 REQUIRES_NEW，确保在 afterCommit 回调中独立开启并提交新事务。
      */
     public void markDispatchFailed(String taskId, String errorMessage) {
         if (transactionTemplate == null) {

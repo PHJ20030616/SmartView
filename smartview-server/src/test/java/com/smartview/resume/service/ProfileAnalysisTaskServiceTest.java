@@ -24,6 +24,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.util.List;
 
@@ -32,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -313,5 +315,39 @@ class ProfileAnalysisTaskServiceTest {
 
         assertThat(status.getStatus()).isEqualTo(TaskStatus.SUCCESS.getCode());
         assertThat(status.getProfileAnalysisId()).isEqualTo("77");
+    }
+
+    // ==================== markDispatchFailed ====================
+
+    @Test
+    void markDispatchFailed_updatesTaskToFailedInIndependentTransaction() {
+        AiTask task = analyzeTask(TaskStatus.PENDING, "t1");
+        when(aiTaskMapper.selectOne(any())).thenReturn(task);
+        // 模拟 REQUIRES_NEW 事务：getTransaction 返回新事务状态，模板提交时独立 commit。
+        TransactionStatus status = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(status);
+
+        service.markDispatchFailed("t1", "MQ 暂时不可用");
+
+        ArgumentCaptor<AiTask> taskCaptor = ArgumentCaptor.forClass(AiTask.class);
+        verify(aiTaskMapper).updateById(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getTaskStatus()).isEqualTo(TaskStatus.FAILED.getCode());
+        assertThat(taskCaptor.getValue().getErrorMessage()).isEqualTo("MQ 暂时不可用");
+        // REQUIRES_NEW 模板在 afterCommit 回调中独立开启并提交，FAILED 更新真正落库。
+        verify(transactionManager).commit(status);
+    }
+
+    @Test
+    void markDispatchFailed_ignoresTerminalTask() {
+        AiTask task = analyzeTask(TaskStatus.SUCCESS, "t1");
+        when(aiTaskMapper.selectOne(any())).thenReturn(task);
+        TransactionStatus status = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(status);
+
+        service.markDispatchFailed("t1", "MQ 暂时不可用");
+
+        // 终态任务不覆盖审计数据，仅独立事务内空提交。
+        verify(aiTaskMapper, never()).updateById(any(AiTask.class));
+        verify(transactionManager).commit(status);
     }
 }

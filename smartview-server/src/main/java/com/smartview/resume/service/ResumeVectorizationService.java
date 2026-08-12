@@ -24,6 +24,7 @@ import com.smartview.task.mq.ResumeVectorizeResultMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -77,6 +78,10 @@ public class ResumeVectorizationService {
         this.objectMapper = objectMapper;
         this.schemaValidator = schemaValidator;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        // 必须在 afterCommit 回调中也能独立提交：默认 REQUIRED 会加入已提交的"幻影事务"，
+        // isNewTransaction=false 导致 UPDATE 不落库被回滚（详情见 markDispatchFailed javadoc）。
+        this.transactionTemplate.setPropagationBehavior(
+                TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -245,6 +250,12 @@ public class ResumeVectorizationService {
 
     /**
      * MQ 投递失败时仅将任务标记为 RETRYING，确认状态保持不变。
+     *
+     * 本方法常在 schedulePublishAfterCommit 的 afterCommit 回调中执行：此时外层事务已
+     * doCommit 但尚未 cleanupAfterCompletion，REQUIRED 会把当前模板加入已提交的"幻影事务"，
+     * isNewTransaction=false 导致 UPDATE 不落库被静默回滚。因此构造函数中事务模板已强制
+     * REQUIRES_NEW，确保在 afterCommit 回调中独立开启并提交新事务，RETRYING 更新真正落库，
+     * 后续由 ResumeVectorRetryScheduler 按租约抢占补偿。
      */
     public void markDispatchFailed(String taskId, String errorMessage) {
         if (transactionTemplate == null) {
