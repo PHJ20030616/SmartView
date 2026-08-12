@@ -21,6 +21,7 @@ import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
+import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -75,6 +76,8 @@ class InterviewSessionServiceTest {
     private InterviewAnswerMapper answerMapper;
     @Mock
     private AnswerEvaluationMapper evaluationMapper;
+    @Mock
+    private ReportTaskService reportTaskService;
 
     private InterviewSessionService service;
     private ObjectMapper objectMapper;
@@ -111,7 +114,8 @@ class InterviewSessionServiceTest {
                 objectMapper,
                 followUpPoolService,
                 answerMapper,
-                evaluationMapper);
+                evaluationMapper,
+                reportTaskService);
     }
 
     private ResumeProfile confirmedProfile() {
@@ -451,22 +455,23 @@ class InterviewSessionServiceTest {
     }
 
     @Test
-    void finishSession_进行中会话置为已完成并记录结束原因() {
+    void finishSession_进行中会话转为报告阶段并触发报告生成() {
         InterviewSession inProgress = InterviewSession.builder()
                 .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").questionCount(3)
                 .expectedMinQuestions(5).expectedMaxQuestions(8).build();
-        InterviewSession completed = InterviewSession.builder()
-                .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").questionCount(3)
+        InterviewSession reporting = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING").questionCount(3)
                 .expectedMinQuestions(5).expectedMaxQuestions(8)
                 .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
-        when(sessionMapper.selectById(1L)).thenReturn(inProgress, completed);
+        when(sessionMapper.selectById(1L)).thenReturn(inProgress, reporting);
         when(sessionMapper.update(isNull(), any())).thenReturn(1);
         when(questionMapper.selectList(any())).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 
+        // 提前结束不再直接置 COMPLETED，而是先进 REPORTING 等待报告生成
         assertThat(response.getStatus())
-                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.REPORTING);
         assertThat(response.getEndedAt()).isNotNull();
         assertThat(response.getAnswers()).isEmpty();
         // 条件更新必须限定状态为 IN_PROGRESS 且版本自增，防并发覆盖终态
@@ -477,6 +482,45 @@ class InterviewSessionServiceTest {
                 .contains("ended_at").contains("version = version + 1");
         // WHERE 必须同时限定 id 与会话状态，防越权操作他人会话或覆盖终态
         assertThat(captor.getValue().getSqlSegment()).contains("status").contains("id");
+        // 条件更新命中 1 行：推进成功后触发报告生成
+        verify(reportTaskService).startReportGeneration(any(InterviewSession.class));
+    }
+
+    @Test
+    void finishSession_提前结束后触发报告生成() {
+        InterviewSession inProgress = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").build();
+        InterviewSession reporting = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING").build();
+        when(sessionMapper.selectById(1L)).thenReturn(inProgress, reporting);
+        when(sessionMapper.update(isNull(), any())).thenReturn(1);
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        service.finishSession(7L, 1L);
+
+        // 报告生成任务在推进事务内触发，传入的会话需携带 id/userId/resumeProfileId 供建行
+        ArgumentCaptor<InterviewSession> captor = ArgumentCaptor.forClass(InterviewSession.class);
+        verify(reportTaskService).startReportGeneration(captor.capture());
+        assertThat(captor.getValue().getId()).isEqualTo(1L);
+        assertThat(captor.getValue().getUserId()).isEqualTo(7L);
+        assertThat(captor.getValue().getResumeProfileId()).isEqualTo(10L);
+    }
+
+    @Test
+    void finishSession_非IN_PROGRESS幂等返回不触发() {
+        // 会话已进入 REPORTING（例如其他端已提前结束并生成报告）：幂等返回现状，不重复触发
+        InterviewSession reporting = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING")
+                .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
+        when(sessionMapper.selectById(1L)).thenReturn(reporting);
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
+
+        assertThat(response.getStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.REPORTING);
+        verify(sessionMapper, never()).update(any(), any());
+        verify(reportTaskService, never()).startReportGeneration(any());
     }
 
     @Test
@@ -510,22 +554,25 @@ class InterviewSessionServiceTest {
         assertThat(response.getStatus())
                 .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
         verify(sessionMapper, never()).update(any(), any());
+        verify(reportTaskService, never()).startReportGeneration(any());
     }
 
     @Test
     void finishSession_并发下条件更新0行时按现状返回() {
         InterviewSession inProgress = InterviewSession.builder()
                 .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").build();
-        InterviewSession concurrentCompleted = InterviewSession.builder()
-                .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").endedAt(LocalDateTime.now()).build();
-        when(sessionMapper.selectById(1L)).thenReturn(inProgress, concurrentCompleted);
+        InterviewSession concurrentReporting = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING").endedAt(LocalDateTime.now()).build();
+        when(sessionMapper.selectById(1L)).thenReturn(inProgress, concurrentReporting);
         when(sessionMapper.update(isNull(), any())).thenReturn(0);
         when(questionMapper.selectList(any())).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 
-        // 并发写入者已把会话置为终态：以服务端现状为准，不抛错
+        // 并发写入者已把会话推进到报告阶段：以服务端现状为准，不抛错
         assertThat(response.getStatus())
-                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.COMPLETED);
+                .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.REPORTING);
+        // 条件更新 0 行：非本次推进成功，不得重复触发报告生成
+        verify(reportTaskService, never()).startReportGeneration(any());
     }
 }

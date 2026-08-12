@@ -23,6 +23,7 @@ import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.model.CandidatePoolItem;
+import com.smartview.report.service.ReportTaskService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -54,6 +55,7 @@ public class InterviewAnswerTxService {
     private final AnswerEvaluationMapper answerEvaluationMapper;
     private final InterviewSessionDtoMapper dtoMapper;
     private final ObjectMapper objectMapper;
+    private final ReportTaskService reportTaskService;
 
     public InterviewAnswerTxService(
             InterviewSessionMapper sessionMapper,
@@ -61,13 +63,15 @@ public class InterviewAnswerTxService {
             InterviewAnswerMapper answerMapper,
             AnswerEvaluationMapper answerEvaluationMapper,
             InterviewSessionDtoMapper dtoMapper,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ReportTaskService reportTaskService) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
         this.answerMapper = answerMapper;
         this.answerEvaluationMapper = answerEvaluationMapper;
         this.dtoMapper = dtoMapper;
         this.objectMapper = objectMapper;
+        this.reportTaskService = reportTaskService;
     }
 
     /**
@@ -139,7 +143,7 @@ public class InterviewAnswerTxService {
 
     /**
      * 会话乐观锁推进：未结束时指向下一题并保持 IN_PROGRESS；
-     * 结束时置 REPORTING + end_reason + ended_at（报告生成在 Phase 6 接入）。
+     * 结束时置 REPORTING + end_reason + ended_at，并在乐观锁推进成功后触发报告生成。
      */
     private void applySessionAdvance(com.smartview.interview.entity.InterviewSession session,
             com.smartview.interview.entity.InterviewQuestion answered,
@@ -157,9 +161,6 @@ public class InterviewAnswerTxService {
             session.setStatus(InterviewSessionStatus.REPORTING.getCode());
             session.setEndReason(decision.getEndReason());
             session.setEndedAt(LocalDateTime.now());
-            // 报告生成任务在 Phase 6（Task 6.1/6.2）接入：本期仅推进状态到 REPORTING
-            log.info("面试结束进入报告阶段 sessionId={} endReason={}（报告生成留待 Phase 6）",
-                    session.getId(), decision.getEndReason());
         }
         session.setStageCoverageJson(applyCoverage(session, answered, decision));
         int rows = sessionMapper.optimisticAdvance(session);
@@ -167,6 +168,13 @@ public class InterviewAnswerTxService {
             // 影响行数为 0 说明 version 不匹配：多端/重复点击并发推进，拒绝本次更新
             throw new BusinessException(ResponseCode.CONFLICT, "会话已被其他请求更新，请刷新后重试",
                     HttpStatus.CONFLICT);
+        }
+        // 会话结束进入报告阶段：在会话推进事务内创建报告行与 ai_task，
+        // MQ 由 ReportTaskService 在事务提交后发送（保证 FastAPI 读到的数据已提交）。
+        if (StagePolicyEngine.ACTION_FINISH.equals(decision.getNextAction())) {
+            log.info("面试结束进入报告阶段 sessionId={} endReason={}",
+                    session.getId(), decision.getEndReason());
+            reportTaskService.startReportGeneration(session);
         }
     }
 

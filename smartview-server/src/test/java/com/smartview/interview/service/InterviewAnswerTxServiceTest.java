@@ -15,6 +15,7 @@ import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.model.CandidatePoolItem;
+import com.smartview.report.service.ReportTaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,13 +43,15 @@ class InterviewAnswerTxServiceTest {
     @Mock private InterviewQuestionMapper questionMapper;
     @Mock private InterviewAnswerMapper answerMapper;
     @Mock private AnswerEvaluationMapper answerEvaluationMapper;
+    @Mock private ReportTaskService reportTaskService;
 
     private InterviewAnswerTxService service;
 
     @BeforeEach
     void setUp() {
         service = new InterviewAnswerTxService(sessionMapper, questionMapper, answerMapper,
-                answerEvaluationMapper, new InterviewSessionDtoMapper(), new ObjectMapper());
+                answerEvaluationMapper, new InterviewSessionDtoMapper(), new ObjectMapper(),
+                reportTaskService);
     }
 
     private InterviewSession session() {
@@ -131,6 +134,34 @@ class InterviewAnswerTxServiceTest {
         assertThat(captor.getValue().getEndReason()).isEqualTo(StagePolicyEngine.END_PLAN_COMPLETED);
         // version 保持旧值传入，由 SQL 自增（WHERE version = 旧值）
         assertThat(captor.getValue().getVersion()).isEqualTo(3);
+    }
+
+    @Test
+    void persist_finish_triggersReportGeneration() {
+        // 自然结束（ACTION_FINISH）：乐观锁推进成功后必须在同一事务内触发报告生成
+        StagePolicyEngine.Decision d = decision(StagePolicyEngine.ACTION_FINISH, null);
+        d.setEndReason(StagePolicyEngine.END_PLAN_COMPLETED);
+        when(sessionMapper.optimisticAdvance(any())).thenReturn(1);
+
+        service.persist(7L, session(), current(), request(), eval(), d, List.of(followUpItem()));
+
+        verify(reportTaskService).startReportGeneration(any(InterviewSession.class));
+    }
+
+    @Test
+    void persist_nonFinish_neverTriggersReportGeneration() {
+        // 面试未结束（FOLLOW_UP 继续）：不得触发报告生成
+        CandidatePoolItem item = followUpItem();
+        when(questionMapper.insert(any(InterviewQuestion.class))).thenAnswer(inv -> {
+            inv.getArgument(0, InterviewQuestion.class).setId(22L);
+            return 1;
+        });
+        when(sessionMapper.optimisticAdvance(any())).thenReturn(1);
+
+        service.persist(7L, session(), current(), request(), eval(),
+                decision(StagePolicyEngine.ACTION_FOLLOW_UP, item), List.of(item));
+
+        verify(reportTaskService, never()).startReportGeneration(any());
     }
 
     @Test

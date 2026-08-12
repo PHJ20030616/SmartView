@@ -29,6 +29,7 @@ import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
+import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -54,7 +55,7 @@ import java.util.stream.Collectors;
  * - createSession：创建面试会话（校验确认简历与方向画像分析 → 生成阶段计划 →
  *   落库会话 → 同步调用 FastAPI 生成首题 → 落库首题 → 更新 current_question_id）
  * - getSession：查询会话详情，供页面刷新后恢复当前题目与已回答历史
- * - finishSession：提前结束面试（仅 IN_PROGRESS 可转为 COMPLETED，记录 USER_FINISHED_EARLY）
+ * - finishSession：提前结束面试（仅 IN_PROGRESS 可转为 REPORTING，记录 USER_FINISHED_EARLY）
  *
  * 关键设计：
  * 1. 会话创建在单个事务中完成，FastAPI 首题生成失败时整体回滚，
@@ -88,6 +89,7 @@ public class InterviewSessionService {
     private final FollowUpPoolService followUpPoolService;
     private final InterviewAnswerMapper answerMapper;
     private final AnswerEvaluationMapper evaluationMapper;
+    private final ReportTaskService reportTaskService;
 
     public InterviewSessionService(
             InterviewSessionMapper sessionMapper,
@@ -100,7 +102,8 @@ public class InterviewSessionService {
             ObjectMapper objectMapper,
             FollowUpPoolService followUpPoolService,
             InterviewAnswerMapper answerMapper,
-            AnswerEvaluationMapper evaluationMapper) {
+            AnswerEvaluationMapper evaluationMapper,
+            ReportTaskService reportTaskService) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
         this.resumeProfileMapper = resumeProfileMapper;
@@ -112,6 +115,7 @@ public class InterviewSessionService {
         this.followUpPoolService = followUpPoolService;
         this.answerMapper = answerMapper;
         this.evaluationMapper = evaluationMapper;
+        this.reportTaskService = reportTaskService;
     }
 
     /**
@@ -264,11 +268,11 @@ public class InterviewSessionService {
     }
 
     /**
-     * 提前结束面试：仅 IN_PROGRESS 会话可转为 COMPLETED，记录 USER_FINISHED_EARLY 结束原因。
+     * 提前结束面试：仅 IN_PROGRESS 会话可转为 REPORTING（报告生成中），记录 USER_FINISHED_EARLY 结束原因。
      *
      * 使用条件 UPDATE（WHERE id=? AND status='IN_PROGRESS'）天然防并发提交/结束竞态，
      * 命中 0 行说明并发写入者已推进/结束会话，重读后幂等返回现状而非报错。
-     * 已处于终态的会话同样幂等返回现状，不重复改写终态。
+     * 已处于非 IN_PROGRESS 的会话同样幂等返回现状，不重复改写终态。
      *
      * 事务隔离级别显式取 READ_COMMITTED：条件更新后需重读会话最新状态返回；
      * 若用默认的 REPEATABLE READ，一致性快照会让重读仍看到事务开始时的旧状态，
@@ -288,14 +292,19 @@ public class InterviewSessionService {
         }
         // 条件更新传入空实体，MyMetaObjectHandler 的 updateFill 不会触发，
         // 需显式落库 updated_at，保证最后更新时间与会话结束动作一致。
-        sessionMapper.update(null, new LambdaUpdateWrapper<InterviewSession>()
+        int rows = sessionMapper.update(null, new LambdaUpdateWrapper<InterviewSession>()
                 .eq(InterviewSession::getId, sessionId)
                 .eq(InterviewSession::getStatus, InterviewSessionStatus.IN_PROGRESS.getCode())
-                .set(InterviewSession::getStatus, InterviewSessionStatus.COMPLETED.getCode())
+                .set(InterviewSession::getStatus, InterviewSessionStatus.REPORTING.getCode())
                 .set(InterviewSession::getEndReason, END_REASON_USER_FINISHED_EARLY)
                 .set(InterviewSession::getEndedAt, LocalDateTime.now())
                 .set(InterviewSession::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1"));
+        // 本次调用把会话推进到报告阶段：报告生成任务在事务提交后触发。
+        // 命中 0 行说明并发写入者已推进/结束会话，不做重复触发。
+        if (rows > 0) {
+            reportTaskService.startReportGeneration(session);
+        }
         // 条件更新幂等：命中=本次结束成功；未命中=并发写入者已推进/结束。
         // 统一重读最新状态再返回，避免内存态过时，同时保证已终态会话不被改写。
         session = sessionMapper.selectById(sessionId);
