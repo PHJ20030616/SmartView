@@ -338,6 +338,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reports/{reportId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 报告生成失败后重试 */
+        post: operations["retryReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -794,6 +811,11 @@ export interface components {
             userId: string;
             /** @description 简历画像 ID */
             resumeProfileId?: string;
+            /**
+             * @description 面试方向
+             * @enum {string}
+             */
+            roleDirection?: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
             /** @description 综合得分 */
             overallScore?: number;
             /**
@@ -812,11 +834,13 @@ export interface components {
             /** @description 风险点 */
             riskPoints?: string[];
             /** @description 学习建议 */
-            suggestions?: string[];
+            suggestions?: components["schemas"]["ReportSuggestion"][];
             /** @description 覆盖情况 */
-            coverage?: Record<string, never>;
+            coverage?: components["schemas"]["ReportCoverage"];
             /** @description 参考答案列表 */
             referenceAnswers?: components["schemas"]["ReferenceAnswer"][];
+            /** @description 已回答问题历史（含用户回答与评估），按提问顺序排序 */
+            answers?: components["schemas"]["AnswerHistoryItem"][];
             /**
              * @description 报告状态
              * @enum {string}
@@ -827,6 +851,40 @@ export interface components {
              * @description 生成时间
              */
             generatedAt?: string;
+        };
+        /** @description 三阶段覆盖率（0~1 比例） */
+        ReportCoverage: {
+            /**
+             * Format: double
+             * @description 基础题覆盖比例
+             */
+            basicCoverage?: number;
+            /**
+             * Format: double
+             * @description 项目题覆盖比例
+             */
+            projectCoverage?: number;
+            /**
+             * Format: double
+             * @description 场景题覆盖比例
+             */
+            scenarioCoverage?: number;
+        };
+        /** @description 单项学习建议 */
+        ReportSuggestion: {
+            /** @description 建议主题 */
+            topic?: string;
+            /** @description 建议原因 */
+            reason?: string;
+            /** @description 推荐资源 */
+            resources?: string[];
+        };
+        /** @description 场景题加权点（权衡维度与可选方案） */
+        AnswerTradeoff: {
+            /** @description 权衡维度 */
+            aspect?: string;
+            /** @description 可选方案 */
+            options?: string[];
         };
         ReferenceAnswer: {
             /** @description 参考答案 ID */
@@ -842,6 +900,8 @@ export interface components {
             referenceContent: string;
             /** @description 关键要点 */
             keyPoints?: string[];
+            /** @description 场景题中的权衡点 */
+            tradeoffs?: components["schemas"]["AnswerTradeoff"][];
         };
     };
     responses: {
@@ -1423,6 +1483,7 @@ export interface operations {
                     "application/json": components["schemas"]["InterviewReportResponse"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -1446,6 +1507,31 @@ export interface operations {
                     "application/json": components["schemas"]["InterviewReportResponse"];
                 };
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    retryReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重试成功（非失败状态幂等返回现状） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterviewReportResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
