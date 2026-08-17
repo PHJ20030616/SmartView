@@ -547,6 +547,28 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/reports/{reportId}/retry:
+    post:
+      tags:
+        - 报告
+      summary: 报告生成失败后重试
+      operationId: retryReport
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 重试成功（非失败状态幂等返回现状）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewReportResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1263,6 +1285,10 @@ components:
         resumeProfileId:
           type: string
           description: 简历画像 ID
+        roleDirection:
+          type: string
+          enum: [JAVA_BACKEND, AGENT_DEVELOPMENT]
+          description: 面试方向
         overallScore:
           type: integer
           minimum: 0
@@ -1299,27 +1325,20 @@ components:
           type: array
           description: 学习建议
           items:
-            type: object
-            properties:
-              topic:
-                type: string
-                description: 建议主题
-              reason:
-                type: string
-                description: 建议原因
-              resources:
-                type: array
-                items:
-                  type: string
-                description: 推荐资源
+            $ref: '#/components/schemas/ReportSuggestion'
         coverage:
-          type: object
+          $ref: '#/components/schemas/ReportCoverage'
           description: 覆盖情况
         referenceAnswers:
           type: array
           items:
             $ref: '#/components/schemas/ReferenceAnswer'
           description: 参考答案列表
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnswerHistoryItem'
+          description: 已回答问题历史（含用户回答与评估），按提问顺序排序
         status:
           type: string
           enum: [GENERATING, SUCCESS, FAILED]
@@ -1328,6 +1347,52 @@ components:
           type: string
           format: date-time
           description: 生成时间
+
+    ReportCoverage:
+      type: object
+      description: 三阶段覆盖率（0~1 比例）
+      properties:
+        basicCoverage:
+          type: number
+          format: double
+          description: 基础题覆盖比例
+        projectCoverage:
+          type: number
+          format: double
+          description: 项目题覆盖比例
+        scenarioCoverage:
+          type: number
+          format: double
+          description: 场景题覆盖比例
+
+    ReportSuggestion:
+      type: object
+      description: 单项学习建议
+      properties:
+        topic:
+          type: string
+          description: 建议主题
+        reason:
+          type: string
+          description: 建议原因
+        resources:
+          type: array
+          items:
+            type: string
+          description: 推荐资源
+
+    AnswerTradeoff:
+      type: object
+      description: 场景题加权点（权衡维度与可选方案）
+      properties:
+        aspect:
+          type: string
+          description: 权衡维度
+        options:
+          type: array
+          items:
+            type: string
+          description: 可选方案
 
     ReferenceAnswer:
       type: object
@@ -1358,16 +1423,7 @@ components:
           type: array
           description: 场景题中的权衡点
           items:
-            type: object
-            properties:
-              aspect:
-                type: string
-                description: 权衡维度
-              options:
-                type: array
-                items:
-                  type: string
-                description: 可选方案
+            $ref: '#/components/schemas/AnswerTradeoff'
 
   responses:
     BadRequest:
