@@ -1040,3 +1040,163 @@ body {
 .session-current-question {
   font-size: 15px;
 }
+
+
+/* ============ 报告页 ============ */
+.report-empty-icon {
+  display: block;
+  margin: 90px auto 16px;
+  color: #c7d1dc;
+  font-size: 64px;
+}
+.report-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.report-score-card {
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(31, 45, 61, 0.08);
+}
+.report-score-card .ant-card-body {
+  padding: 24px 26px;
+}
+.report-score-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #8793a3;
+  font-size: 14px;
+}
+.report-score-value {
+  margin: 0 !important;
+  color: #172337 !important;
+  font-size: 40px !important;
+}
+.report-readiness {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  margin: 6px 0;
+}
+.report-readiness .ant-tag {
+  font-size: 15px;
+  padding: 4px 12px;
+  border-radius: 6px;
+}
+.report-section {
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(31, 45, 61, 0.08);
+  margin-bottom: 20px;
+}
+.report-coverage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.report-coverage-item {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.report-coverage-label {
+  color: #647286;
+  font-size: 14px;
+}
+.report-quad-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.report-quad-card {
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(31, 45, 61, 0.08);
+}
+.report-quad-card .ant-card-body {
+  padding: 24px 26px;
+}
+.report-quad-title {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #172337;
+}
+.report-quad-title.is-good {
+  color: #52c41a;
+}
+.report-quad-title.is-warning {
+  color: #fa8c16;
+}
+.report-quad-title.is-danger {
+  color: #ff4d4f;
+}
+.report-quad-list,
+.report-suggestion-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #344054;
+  line-height: 1.8;
+}
+.report-suggestion-list li {
+  margin-bottom: 10px;
+}
+.report-suggestion-resources {
+  margin-top: 6px;
+}
+.report-suggestion-resources .ant-tag {
+  margin-bottom: 4px;
+}
+.report-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.report-review-card {
+  border: 1px solid #e7ebf0;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.report-review-question {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.report-review-answer {
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  color: var(--text-color, rgba(0, 0, 0, 0.88));
+}
+.report-review-evaluation {
+  padding-top: 4px;
+}
+.report-reference-collapse {
+  margin-top: 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+.report-reference-collapse .ant-collapse-header {
+  color: #0f9f94 !important;
+  font-weight: 600;
+}
+.report-reference-points {
+  margin-top: 10px;
+}
+.report-reference-points .ant-tag {
+  margin-bottom: 4px;
+}
+.report-tradeoff-item {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 768px) {
+  .report-overview-grid,
+  .report-coverage,
+  .report-quad-grid {
+    grid-template-columns: 1fr;
+  }
+}
