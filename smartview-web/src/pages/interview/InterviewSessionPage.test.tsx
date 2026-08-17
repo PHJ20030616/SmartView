@@ -59,6 +59,7 @@ function renderSessionPage(initialEntry: string) {
           { path: "/interview/session", element: <InterviewSessionPage /> },
           { path: "/", element: <div>首页</div> },
           { path: "/interview", element: <div>面试入口</div> },
+          { path: "/report", element: <div>报告页</div> },
         ],
       },
     ],
@@ -178,5 +179,22 @@ describe("面试会话页面", () => {
     renderSessionPage("/interview/session?sessionId=1");
 
     expect(await screen.findByText("面试已结束")).toBeTruthy();
+  });
+
+  it("已结束会话提供查看报告入口", async () => {
+    restoreSessionMock.mockResolvedValue({
+      ...activeSession(),
+      status: "COMPLETED",
+      currentQuestion: undefined,
+    });
+    const router = renderSessionPage("/interview/session?sessionId=1");
+    expect(await screen.findByText("面试已结束")).toBeTruthy();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /查看报告/ }));
+
+    // 按钮跳转到报告页并携带 sessionId（面试结束页 → 报告页入口验收）
+    expect(router.state.location.pathname).toBe("/report");
+    expect(router.state.location.search).toBe("?sessionId=1");
   });
 });

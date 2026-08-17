@@ -296,11 +296,18 @@ export default function InterviewSessionPage() {
               <CheckCircleFilled className="state-panel-icon is-success" />
               <Typography.Title className="state-panel-title" level={3}>面试已结束</Typography.Title>
               <Typography.Paragraph className="state-panel-description">
-                共完成 {ended.questionCount ?? 0} 题，已回答内容与评估均已保留。
-                {ended.status === "COMPLETED" ? " 报告生成功能将在后续版本开放。" : ""}
+                共完成 {ended.questionCount ?? 0} 题，已回答内容与评估均已保留，可查看完整复盘报告。
               </Typography.Paragraph>
               <Space size={12} wrap>
-                <Button type="primary" onClick={() => navigate("/")}>返回首页</Button>
+                <Button
+                  type="primary"
+                  onClick={() =>
+                    navigate(`/report?sessionId=${encodeURIComponent(ended.id)}`)
+                  }
+                >
+                  查看报告
+                </Button>
+                <Button onClick={() => navigate("/")}>返回首页</Button>
                 <Button
                   onClick={() =>
                     navigate(`/interview?profileId=${encodeURIComponent(ended.resumeProfileId)}`)
