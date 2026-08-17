@@ -10,12 +10,10 @@ import com.smartview.common.enums.ConfirmStatus;
 import com.smartview.common.enums.RoleDirection;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.CreateInterviewSessionRequest;
+import com.smartview.interview.dto.AnswerHistoryAssembler;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
-import com.smartview.interview.entity.InterviewAnswer;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
-import com.smartview.interview.mapper.AnswerEvaluationMapper;
-import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
@@ -73,9 +71,7 @@ class InterviewSessionServiceTest {
     @Mock
     private FollowUpPoolService followUpPoolService;
     @Mock
-    private InterviewAnswerMapper answerMapper;
-    @Mock
-    private AnswerEvaluationMapper evaluationMapper;
+    private AnswerHistoryAssembler answerHistoryAssembler;
     @Mock
     private ReportTaskService reportTaskService;
 
@@ -113,8 +109,7 @@ class InterviewSessionServiceTest {
                 new InterviewSessionDtoMapper(),
                 objectMapper,
                 followUpPoolService,
-                answerMapper,
-                evaluationMapper,
+                answerHistoryAssembler,
                 reportTaskService);
     }
 
@@ -354,22 +349,18 @@ class InterviewSessionServiceTest {
         when(questionMapper.selectById(22L))
                 .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
 
-        // mock 故意以乱序（问题二在前）返回，验证服务端在内存中重新按提问序号排序，
-        // 而非仅依赖 mock/数据库返回顺序
-        when(questionMapper.selectList(any())).thenReturn(List.of(
-                InterviewQuestion.builder().id(12L).sessionId(1L).questionOrder(2)
-                        .questionText("问题二").status("ANSWERED").build(),
-                InterviewQuestion.builder().id(11L).sessionId(1L).questionOrder(1)
-                        .questionText("问题一").status("ANSWERED").build()));
-        when(answerMapper.selectList(any())).thenReturn(List.of(
-                InterviewAnswer.builder().id(101L).questionId(11L).answerText("回答一")
-                        .submittedAt(LocalDateTime.of(2026, 8, 9, 10, 0)).build(),
-                InterviewAnswer.builder().id(102L).questionId(12L).answerText("回答二")
-                        .submittedAt(LocalDateTime.of(2026, 8, 9, 10, 1)).build()));
-        when(evaluationMapper.selectList(any())).thenReturn(List.of(
-                com.smartview.interview.entity.AnswerEvaluation.builder()
-                        .id(201L).questionId(11L).score(85).level("GOOD")
-                        .evaluationText("要点清晰").build()));
+        // 组装逻辑由 AnswerHistoryAssemblerTest 覆盖，此处 stub 其有序输出（问题一在前）。
+        // 生成 DTO 与实体同名，沿用本文件既有约定：实体短名、生成 DTO 全限定名。
+        com.smartview.generated.web.model.AnswerHistoryItem q1 =
+                new com.smartview.generated.web.model.AnswerHistoryItem(
+                        new com.smartview.generated.web.model.InterviewQuestion("11", "1", 1, "问题一"), "回答一")
+                        .evaluation(new com.smartview.generated.web.model.AnswerEvaluation(85,
+                                com.smartview.generated.web.model.AnswerEvaluation.LevelEnum.GOOD)
+                                .evaluationText("要点清晰"));
+        com.smartview.generated.web.model.AnswerHistoryItem q2 =
+                new com.smartview.generated.web.model.AnswerHistoryItem(
+                        new com.smartview.generated.web.model.InterviewQuestion("12", "1", 2, "问题二"), "回答二");
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of(q1, q2));
 
         com.smartview.generated.web.model.InterviewSession response = service.getSession(7L, 1L);
 
@@ -394,11 +385,31 @@ class InterviewSessionServiceTest {
         when(sessionMapper.selectById(1L)).thenReturn(session);
         when(questionMapper.selectById(22L))
                 .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.getSession(7L, 1L);
 
         assertThat(response.getAnswers()).isEmpty();
+    }
+
+    @Test
+    void getSession_委托组装器加载已回答历史() {
+        // 验证 buildSessionResponse 透传 AnswerHistoryAssembler 的装配结果（委托复用契约）
+        InterviewSession session = InterviewSession.builder()
+                .id(1L).userId(7L).resumeProfileId(10L).status("IN_PROGRESS").currentQuestionId(22L)
+                .questionCount(2).expectedMinQuestions(5).expectedMaxQuestions(8).build();
+        when(sessionMapper.selectById(1L)).thenReturn(session);
+        when(questionMapper.selectById(22L))
+                .thenReturn(InterviewQuestion.builder().id(22L).sessionId(1L).questionText("当前题").build());
+        com.smartview.generated.web.model.AnswerHistoryItem q1 =
+                new com.smartview.generated.web.model.AnswerHistoryItem(
+                        new com.smartview.generated.web.model.InterviewQuestion("11", "1", 1, "问题一"), "回答一");
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of(q1));
+
+        com.smartview.generated.web.model.InterviewSession response = service.getSession(7L, 1L);
+
+        assertThat(response.getAnswers()).hasSize(1);
+        assertThat(response.getAnswers().get(0).getQuestion().getQuestionText()).isEqualTo("问题一");
     }
 
     @Test
@@ -465,7 +476,7 @@ class InterviewSessionServiceTest {
                 .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
         when(sessionMapper.selectById(1L)).thenReturn(inProgress, reporting);
         when(sessionMapper.update(isNull(), any())).thenReturn(1);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 
@@ -494,7 +505,7 @@ class InterviewSessionServiceTest {
                 .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING").build();
         when(sessionMapper.selectById(1L)).thenReturn(inProgress, reporting);
         when(sessionMapper.update(isNull(), any())).thenReturn(1);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         service.finishSession(7L, 1L);
 
@@ -513,7 +524,7 @@ class InterviewSessionServiceTest {
                 .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING")
                 .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
         when(sessionMapper.selectById(1L)).thenReturn(reporting);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 
@@ -547,7 +558,7 @@ class InterviewSessionServiceTest {
                 .id(1L).userId(7L).resumeProfileId(10L).status("COMPLETED").questionCount(3)
                 .endedAt(LocalDateTime.of(2026, 8, 9, 11, 0)).build();
         when(sessionMapper.selectById(1L)).thenReturn(completed);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 
@@ -565,7 +576,7 @@ class InterviewSessionServiceTest {
                 .id(1L).userId(7L).resumeProfileId(10L).status("REPORTING").endedAt(LocalDateTime.now()).build();
         when(sessionMapper.selectById(1L)).thenReturn(inProgress, concurrentReporting);
         when(sessionMapper.update(isNull(), any())).thenReturn(0);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
+        when(answerHistoryAssembler.load(1L)).thenReturn(List.of());
 
         com.smartview.generated.web.model.InterviewSession response = service.finishSession(7L, 1L);
 

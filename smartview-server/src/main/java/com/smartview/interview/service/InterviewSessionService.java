@@ -11,10 +11,9 @@ import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.ConfirmStatus;
 import com.smartview.common.enums.RoleDirection;
 import com.smartview.common.exception.BusinessException;
-import com.smartview.generated.web.model.AnswerHistoryItem;
 import com.smartview.generated.web.model.CreateInterviewSessionRequest;
+import com.smartview.interview.dto.AnswerHistoryAssembler;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
-import com.smartview.interview.entity.InterviewAnswer;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
 import com.smartview.interview.enums.InterviewQuestionStatus;
@@ -22,8 +21,6 @@ import com.smartview.interview.enums.InterviewQuestionType;
 import com.smartview.interview.enums.InterviewSessionStatus;
 import com.smartview.interview.enums.InterviewStage;
 import com.smartview.interview.enums.QuestionSourceType;
-import com.smartview.interview.mapper.AnswerEvaluationMapper;
-import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
@@ -42,11 +39,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * 面试会话服务。
@@ -66,7 +59,9 @@ import java.util.stream.Collectors;
  * 3. 阶段计划由 Spring 确定性生成并落库 stage_plan_json，FastAPI 只负责
  *    基于计划的必覆盖主题生成首题（职责边界见 docs/interview-policy.md）；
  * 4. 会话创建后置 IN_PROGRESS 并记录 started_at、graph_thread_id，
- *    页面可通过 GET 详情按 current_question_id 恢复当前题目。
+ *    页面可通过 GET 详情按 current_question_id 恢复当前题目；
+ * 5. 已回答历史（已答题目+回答+评估）的装配逻辑委托 AnswerHistoryAssembler，
+ *    供会话查询与报告查询（ReportQueryService）复用，避免两处复制同一装配逻辑。
  *
  * @author SmartView Team
  * @since 2026-08-05
@@ -87,8 +82,7 @@ public class InterviewSessionService {
     private final InterviewSessionDtoMapper dtoMapper;
     private final ObjectMapper objectMapper;
     private final FollowUpPoolService followUpPoolService;
-    private final InterviewAnswerMapper answerMapper;
-    private final AnswerEvaluationMapper evaluationMapper;
+    private final AnswerHistoryAssembler answerHistoryAssembler;
     private final ReportTaskService reportTaskService;
 
     public InterviewSessionService(
@@ -101,8 +95,7 @@ public class InterviewSessionService {
             InterviewSessionDtoMapper dtoMapper,
             ObjectMapper objectMapper,
             FollowUpPoolService followUpPoolService,
-            InterviewAnswerMapper answerMapper,
-            AnswerEvaluationMapper evaluationMapper,
+            AnswerHistoryAssembler answerHistoryAssembler,
             ReportTaskService reportTaskService) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
@@ -113,8 +106,7 @@ public class InterviewSessionService {
         this.dtoMapper = dtoMapper;
         this.objectMapper = objectMapper;
         this.followUpPoolService = followUpPoolService;
-        this.answerMapper = answerMapper;
-        this.evaluationMapper = evaluationMapper;
+        this.answerHistoryAssembler = answerHistoryAssembler;
         this.reportTaskService = reportTaskService;
     }
 
@@ -231,43 +223,6 @@ public class InterviewSessionService {
     }
 
     /**
-     * 加载会话已回答问题历史（问题 + 回答 + 评估），按提问顺序排序。
-     *
-     * 供页面刷新后恢复历史问答；仅查 ANSWERED 状态问题（未答/跳过不进入历史）。
-     * 单会话问题量有限，采用分批查询在内存按 questionId 关联，避免逐题 N+1。
-     */
-    private List<AnswerHistoryItem> loadAnswerHistory(Long sessionId) {
-        List<InterviewQuestion> answered = questionMapper.selectList(
-                new LambdaQueryWrapper<InterviewQuestion>()
-                        .eq(InterviewQuestion::getSessionId, sessionId)
-                        .eq(InterviewQuestion::getStatus, InterviewQuestionStatus.ANSWERED.getCode())
-                        .orderByAsc(InterviewQuestion::getQuestionOrder));
-        if (answered.isEmpty()) {
-            return new ArrayList<>();
-        }
-        Map<Long, InterviewAnswer> answerByQuestionId = answerMapper.selectList(
-                        new LambdaQueryWrapper<InterviewAnswer>()
-                                .eq(InterviewAnswer::getSessionId, sessionId))
-                .stream()
-                .collect(Collectors.toMap(InterviewAnswer::getQuestionId, item -> item));
-        Map<Long, com.smartview.interview.entity.AnswerEvaluation> evaluationByQuestionId =
-                evaluationMapper.selectList(
-                                new LambdaQueryWrapper<com.smartview.interview.entity.AnswerEvaluation>()
-                                        .eq(com.smartview.interview.entity.AnswerEvaluation::getSessionId, sessionId))
-                        .stream()
-                        .collect(Collectors.toMap(
-                                com.smartview.interview.entity.AnswerEvaluation::getQuestionId, item -> item));
-        // 内存内再按提问序号排序：不依赖数据库返回顺序，确定性保证输出有序（同时使该保证可被单测直接验证）
-        return answered.stream()
-                .sorted(Comparator.comparing(InterviewQuestion::getQuestionOrder))
-                .map(question -> dtoMapper.toAnswerHistoryItem(
-                        question,
-                        answerByQuestionId.get(question.getId()),
-                        evaluationByQuestionId.get(question.getId())))
-                .toList();
-    }
-
-    /**
      * 提前结束面试：仅 IN_PROGRESS 会话可转为 REPORTING（报告生成中），记录 USER_FINISHED_EARLY 结束原因。
      *
      * 使用条件 UPDATE（WHERE id=? AND status='IN_PROGRESS'）天然防并发提交/结束竞态，
@@ -311,12 +266,12 @@ public class InterviewSessionService {
         return buildSessionResponse(session);
     }
 
-    /** 组装会话响应：当前问题（可为空）+ 已回答历史 */
+    /** 组装会话响应：当前问题（可为空）+ 已回答历史（历史装配委托 AnswerHistoryAssembler） */
     private com.smartview.generated.web.model.InterviewSession buildSessionResponse(InterviewSession session) {
         InterviewQuestion current = session.getCurrentQuestionId() == null
                 ? null
                 : questionMapper.selectById(session.getCurrentQuestionId());
-        return dtoMapper.toResponse(session, current).answers(loadAnswerHistory(session.getId()));
+        return dtoMapper.toResponse(session, current).answers(answerHistoryAssembler.load(session.getId()));
     }
 
     /**
