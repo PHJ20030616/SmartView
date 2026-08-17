@@ -274,6 +274,51 @@ public class ReportTaskService {
     }
 
     /**
+     * 报告 FAILED 后手工重试：报告置回 GENERATING，重建报告任务并重投 MQ。
+     *
+     * 幂等约束：
+     * - 非 FAILED 报告幂等返回：进行中/已成功报告不得被覆盖重建；
+     * - 同会话已有进行中报告任务（PENDING/PROCESSING/RETRYING）时跳过，防并发重复投递。
+     * 报告行原地复用（不新建），不会触碰 (session_id, deleted) 唯一索引；
+     * 重试不改变会话状态（已 COMPLETED 保持不动），与补偿调度共用 buildTask/投递链路。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void retryReportGeneration(InterviewReport report) {
+        if (!ReportStatus.FAILED.getCode().equals(report.getStatus())) {
+            log.info("报告非失败状态，跳过重试，reportId={}, status={}",
+                    report.getId(), report.getStatus());
+            return;
+        }
+        // 同会话已有进行中的报告任务则跳过，避免并发重试/补偿产生重复 MQ 投递。
+        AiTask running = aiTaskMapper.selectOne(
+                new LambdaQueryWrapper<AiTask>()
+                        .eq(AiTask::getTaskType, TaskType.REPORT_GENERATE.getCode())
+                        .eq(AiTask::getBizType, BizType.INTERVIEW_SESSION.getCode())
+                        .eq(AiTask::getBizId, report.getSessionId())
+                        .in(AiTask::getTaskStatus,
+                                TaskStatus.PENDING.getCode(),
+                                TaskStatus.PROCESSING.getCode(),
+                                TaskStatus.RETRYING.getCode())
+                        .last("LIMIT 1"));
+        if (running != null) {
+            log.info("报告任务已在进行，跳过重试，sessionId={}, taskId={}",
+                    report.getSessionId(), running.getTaskId());
+            return;
+        }
+        // 报告置回生成中并清空完成时间，重投后由结果消费者重新填充。
+        report.setStatus(ReportStatus.GENERATING.getCode());
+        report.setGeneratedAt(null);
+        interviewReportMapper.updateById(report);
+
+        InterviewSession session = sessionMapper.selectById(report.getSessionId());
+        AiTask task = buildTask(session);
+        aiTaskMapper.insert(task);
+        schedulePublishAfterCommit(task, report.getSessionId());
+        log.info("报告重试任务已创建，reportId={}, sessionId={}, taskId={}",
+                report.getId(), report.getSessionId(), task.getTaskId());
+    }
+
+    /**
      * 补偿调度重建报告生成任务：退休旧任务并创建新 taskId 补偿任务。
      *
      * 仅当会话仍处于 REPORTING 时执行（报告已成功/失败、会话已 COMPLETED 则跳过）。

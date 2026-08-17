@@ -381,4 +381,49 @@ class ReportTaskServiceTest {
         verify(aiTaskMapper, never()).insert(any(AiTask.class));
         verify(producer, never()).sendWithRetry(any(), anyInt(), anyLong());
     }
+
+    // ==================== retryReportGeneration ====================
+
+    @Test
+    void retryReportGeneration_仅失败报告重建任务() {
+        InterviewReport failed = InterviewReport.builder()
+                .id(88L).sessionId(66L).userId(7L).status("FAILED").build();
+        when(aiTaskMapper.selectOne(any())).thenReturn(null);
+        when(sessionMapper.selectById(66L)).thenReturn(
+                InterviewSession.builder().id(66L).userId(7L).resumeProfileId(12L).build());
+        when(producer.sendWithRetry(any(), anyInt(), anyLong())).thenReturn(true);
+
+        service.retryReportGeneration(failed);
+
+        // 报告置回 GENERATING 并清空生成时间，由结果消费者重投后重新填充
+        ArgumentCaptor<InterviewReport> reportCaptor = ArgumentCaptor.forClass(InterviewReport.class);
+        verify(interviewReportMapper).updateById(reportCaptor.capture());
+        assertThat(reportCaptor.getValue().getStatus())
+                .isEqualTo(ReportStatus.GENERATING.getCode());
+        assertThat(reportCaptor.getValue().getGeneratedAt()).isNull();
+        // 任务被重建为 PENDING 并在事务提交后投递 MQ（无活动事务时立即发送）
+        ArgumentCaptor<AiTask> taskCaptor = ArgumentCaptor.forClass(AiTask.class);
+        verify(aiTaskMapper).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().getTaskStatus()).isEqualTo(TaskStatus.PENDING.getCode());
+        verify(producer).sendWithRetry(any(), anyInt(), anyLong());
+    }
+
+    @Test
+    void retryReportGeneration_非失败报告幂等跳过() {
+        InterviewReport success = InterviewReport.builder()
+                .id(88L).sessionId(66L).userId(7L).status("SUCCESS").build();
+        service.retryReportGeneration(success);
+        verify(interviewReportMapper, never()).updateById(any(InterviewReport.class));
+        verify(aiTaskMapper, never()).insert(any(AiTask.class));
+    }
+
+    @Test
+    void retryReportGeneration_已有进行中任务时跳过() {
+        InterviewReport failed = InterviewReport.builder()
+                .id(88L).sessionId(66L).userId(7L).status("FAILED").build();
+        when(aiTaskMapper.selectOne(any())).thenReturn(reportTask(TaskStatus.PROCESSING, "t-1"));
+        service.retryReportGeneration(failed);
+        verify(interviewReportMapper, never()).updateById(any(InterviewReport.class));
+        verify(aiTaskMapper, never()).insert(any(AiTask.class));
+    }
 }
