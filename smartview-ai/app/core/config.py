@@ -124,6 +124,26 @@ class Settings(BaseSettings):
         "report.generate.result.dlq"
     )
 
+    # 清理任务队列/路由键（Task 7.2）：简历删除后 Spring 投递，cleanup worker 消费，
+    # 删除 MinIO 对象与对应画像的全部 Chroma 向量，再回传结果。
+    rabbitmq_cleanup_queue: str = "smartview.cleanup.v1"
+    rabbitmq_cleanup_routing_key: str = "cleanup.task"
+    rabbitmq_cleanup_result_routing_key: str = "cleanup.result"
+    rabbitmq_cleanup_dead_letter_queue: str = "smartview.cleanup.dlq"
+    rabbitmq_cleanup_dead_letter_routing_key: str = "cleanup.task.dlq"
+
+    # MinIO 清理凭据（Task 7.2）：与 Spring smartview.minio.* 同源，取自
+    # smartview-infra/.env（MINIO_ENDPOINT/MINIO_ROOT_USER/MINIO_ROOT_PASSWORD/
+    # MINIO_BUCKET/MINIO_REGION）。仅 cleanup worker 使用，用于直接删除对象。
+    minio_endpoint: str = Field(default="http://localhost:9000", alias="MINIO_ENDPOINT")
+    minio_access_key: str = Field(default="smartview", alias="MINIO_ROOT_USER")
+    minio_secret_key: SecretStr = Field(
+        default=SecretStr("12345678"),
+        alias="MINIO_ROOT_PASSWORD",
+    )
+    minio_bucket: str = Field(default="smartview", alias="MINIO_BUCKET")
+    minio_region: str = Field(default="us-east-1", alias="MINIO_REGION")
+
     # 向量入库依赖：FastAPI 只读取已确认画像，不直接接受前端传入的完整简历。
     # MySQL/RabbitMQ 账号密码等共享凭据统一由 smartview-infra/.env 注入，
     # 这里只保留与 Spring 一致的代码兜底默认值（本地 MySQL 默认创建 root）。

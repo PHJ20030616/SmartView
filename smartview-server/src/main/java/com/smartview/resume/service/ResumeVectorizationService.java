@@ -154,6 +154,9 @@ public class ResumeVectorizationService {
      * <p>删除任务允许作用于未确认画像，因为删除动作的目标是清理可能已经
      * 写入过的历史向量，而不是向量化未确认内容。任务记录在软删除事务内创建，
      * 消息在事务提交后发送。</p>
+     *
+     * <p>注意：Task 7.2 起简历删除已合并为单个 CLEANUP 任务（CleanupTaskService），
+     * 本方法保留供运维手工触发或历史补偿使用，业务删除流程不再调用。</p>
      */
     public AiTask ensureDeleteTask(ResumeProfile profile) {
         AiTask existing = findLatestTask(

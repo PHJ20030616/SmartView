@@ -94,3 +94,14 @@ export async function finishInterviewSessionApi(
   );
   return extractData(response.data, `/interview-sessions/${sessionId}/finish`);
 }
+
+/** 删除面试会话（软删除，Task 7.2） DELETE /api/interview-sessions/{sessionId} */
+export async function deleteInterviewSessionApi(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await request.delete<ApiResponseWrapper<null>>(
+    `/interview-sessions/${sessionId}`,
+    { signal },
+  );
+}

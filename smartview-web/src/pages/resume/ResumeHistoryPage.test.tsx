@@ -14,16 +14,18 @@ import { App as AntApp } from "antd";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getResumeHistoryApi } from "../../features/resume";
+import { deleteResumeApi, getResumeHistoryApi } from "../../features/resume";
 import type { ResumeFilePage } from "../../features/resume";
 import ResumeHistoryPage from "./ResumeHistoryPage";
 
 // 模拟 API 层：不发起真实请求，聚焦页面渲染与跳转
 vi.mock("../../features/resume", () => ({
   getResumeHistoryApi: vi.fn(),
+  deleteResumeApi: vi.fn(),
 }));
 
 const getResumeHistoryApiMock = vi.mocked(getResumeHistoryApi);
+const deleteResumeApiMock = vi.mocked(deleteResumeApi);
 
 /** 确认页占位组件：用于断言"查看画像"是否跳转到确认路由 */
 function ConfirmPageStub() {
@@ -219,5 +221,37 @@ describe("历史简历页面", () => {
     expect(await screen.findByText("第二页.pdf")).toBeInTheDocument();
     // 第三个参数为 AbortSignal，只断言前两个分页参数
     expect(getResumeHistoryApiMock).toHaveBeenLastCalledWith(2, 10, expect.any(AbortSignal));
+  });
+
+  it("确认删除后调用删除接口并重新加载列表（Task 7.2）", async () => {
+    getResumeHistoryApiMock
+      .mockResolvedValueOnce(
+        pageOf([
+          {
+            id: "1",
+            userId: "7",
+            originalFilename: "待删除.pdf",
+            parseStatus: "SUCCESS",
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(pageOf([]));
+    deleteResumeApiMock.mockResolvedValue(undefined);
+
+    const user = userEvent.setup();
+    renderHistoryPage();
+
+    await user.click(await screen.findByRole("button", { name: /删\s*除/ }));
+    // 确认按钮文案与触发按钮不同（确认删除），避免与触发按钮匹配歧义
+    await user.click(await screen.findByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => {
+      expect(deleteResumeApiMock).toHaveBeenCalledWith("1");
+    });
+    // 删除成功后重新拉取列表（当前页已空，自动回退后仍保持空态）
+    expect(getResumeHistoryApiMock).toHaveBeenCalledTimes(2);
+    expect(
+      await screen.findByText("暂无历史简历，去上传你的第一份简历吧"),
+    ).toBeInTheDocument();
   });
 });

@@ -29,4 +29,4 @@ export {
   waitForResumeVectorization,
 } from "./resumeService";
 export { ProfileAnalysisError, ResumeVectorizationError } from "./resumeService";
-export { getResumeHistoryApi } from "./resumeApi";
+export { deleteResumeApi, getResumeHistoryApi } from "./resumeApi";

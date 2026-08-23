@@ -9,6 +9,7 @@ export {
 } from "./interviewService";
 export {
   createInterviewSessionApi,
+  deleteInterviewSessionApi,
   finishInterviewSessionApi,
   getInterviewSessionApi,
   listInterviewSessionsApi,

@@ -3,6 +3,7 @@ package com.smartview.resume.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.smartview.cleanup.CleanupTaskService;
 import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.BizType;
 import com.smartview.common.enums.ParseStatus;
@@ -70,7 +71,7 @@ public class ResumeFileService {
     private final MinioService minioService;
     private final ResumeTaskProducer resumeTaskProducer;
     private final ResumeProperties resumeProperties;
-    private final ResumeVectorizationService resumeVectorizationService;
+    private final CleanupTaskService cleanupTaskService;
     private final TransactionTemplate transactionTemplate;
 
     /**
@@ -86,7 +87,7 @@ public class ResumeFileService {
             MinioService minioService,
             ResumeTaskProducer resumeTaskProducer,
             ResumeProperties resumeProperties,
-            ResumeVectorizationService resumeVectorizationService,
+            CleanupTaskService cleanupTaskService,
             TransactionTemplate transactionTemplate
     ) {
         this.resumeFileMapper = resumeFileMapper;
@@ -95,12 +96,12 @@ public class ResumeFileService {
         this.minioService = minioService;
         this.resumeTaskProducer = resumeTaskProducer;
         this.resumeProperties = resumeProperties;
-        this.resumeVectorizationService = resumeVectorizationService;
+        this.cleanupTaskService = cleanupTaskService;
         this.transactionTemplate = transactionTemplate;
     }
 
     /**
-     * 保留旧测试和非 Spring 调用方的构造函数；生产环境使用包含向量服务的构造函数。
+     * 保留旧测试和非 Spring 调用方的构造函数；生产环境使用包含清理服务的构造函数。
      */
     public ResumeFileService(
             ResumeFileMapper resumeFileMapper,
@@ -258,9 +259,11 @@ public class ResumeFileService {
     /**
      * 删除用户的简历文件及其全部画像版本。
      *
-     * <p>MySQL 中的软删除和 DELETE 向量任务在同一事务内提交，确保删除操作发生后，
-     * 已经确认的画像不会继续作为有效数据被读取。向量库与 MinIO 都属于外部依赖，
-     * 它们的临时异常只记录日志并由后续任务补偿，不能回滚 MySQL 的权威删除状态。</p>
+     * <p>MySQL 中的软删除与清理任务创建在同一事务内提交，确保删除操作发生后，
+     * 已经确认的画像不会继续作为有效数据被读取；同时保证删除后必有可追踪的
+     * CLEANUP 任务记录（审计信息）。MinIO 对象与 Chroma 向量都属于外部派生数据，
+     * 由 FastAPI cleanup worker 异步删除，临时异常只记录日志并由 CleanupRetryScheduler
+     * 补偿，不能回滚 MySQL 的权威删除状态。</p>
      *
      * @param resumeFileId 简历文件 ID
      * @param userId 当前登录用户 ID
@@ -284,54 +287,23 @@ public class ResumeFileService {
                                 .eq(ResumeProfile::getResumeFileId, resumeFileId)
                                 .last("FOR UPDATE"));
 
-        // 先写入删除任务，再软删除画像；DELETE worker 不依赖画像仍处于有效状态，
-        // 但任务记录必须和本次删除一起提交，才能保证删除后有可追踪的清理动作。
-        if (resumeVectorizationService != null) {
-            for (ResumeProfile profile : profiles) {
-                resumeVectorizationService.ensureDeleteTask(profile);
-            }
+        // 先写入统一清理任务（删除 MinIO 对象 + 全部画像的 Chroma 向量），再软删除画像与文件；
+        // 任务记录必须和本次删除一起提交，才能保证删除后有可追踪、可重试的清理动作。
+        if (cleanupTaskService != null) {
+            cleanupTaskService.ensureCleanupTask(
+                    resumeFile.getId(),
+                    resumeFile.getObjectKey(),
+                    profiles.stream().map(ResumeProfile::getId).toList(),
+                    userId);
         }
 
         for (ResumeProfile profile : profiles) {
             resumeProfileMapper.deleteById(profile.getId());
         }
         resumeFileMapper.deleteById(resumeFile.getId());
-        scheduleMinioDeleteAfterCommit(resumeFile.getObjectKey(), resumeFile.getId());
 
-        log.info("简历文件已标记删除，userId={}, resumeFileId={}, profileCount={}",
+        log.info("简历文件已标记删除，userId={}, resumeFileId={}, profileCount={}, 清理任务已登记",
                 userId, resumeFileId, profiles.size());
-    }
-
-    /**
-     * 事务提交后清理对象存储文件。
-     *
-     * <p>MinIO 删除失败不能影响 MySQL 已提交的软删除结果；向量和对象存储均属于
-     * 可重试的派生数据，后续清理任务可以根据 objectKey 继续补偿。</p>
-     */
-    private void scheduleMinioDeleteAfterCommit(String objectKey, Long resumeFileId) {
-        if (objectKey == null || objectKey.isBlank()) {
-            return;
-        }
-        Runnable delete = () -> {
-            try {
-                minioService.deleteFile(objectKey);
-            } catch (Exception exception) {
-                log.error("简历文件已删除但 MinIO 清理失败，等待后续补偿，resumeFileId={}, objectKey={}",
-                        resumeFileId, objectKey, exception);
-            }
-        };
-
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    delete.run();
-                }
-            });
-        } else {
-            // 兼容非事务测试或内部调用；正式删除入口始终由 @Transactional 执行。
-            delete.run();
-        }
     }
 
     /**

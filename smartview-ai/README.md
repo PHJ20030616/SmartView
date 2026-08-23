@@ -19,6 +19,11 @@ python -m app.workers.resume_worker
 python -m app.workers.resume_vectorize_worker
 
 python -m app.workers.profile_worker
+
+python -m app.workers.report_worker
+
+
+python -m app.workers.cleanup_worker
 ```
 
 简历解析采用独立 RabbitMQ worker 消费 `smartview.resume.parse` 队列。启动 FastAPI

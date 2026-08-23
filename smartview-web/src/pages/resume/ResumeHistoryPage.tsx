@@ -1,33 +1,38 @@
 /**
- * 历史简历页面（Task 7.1）
+ * 历史简历页面（Task 7.1 / Task 7.2）
  *
  * 展示当前用户上传过的全部简历文件历史（分页）：
  * - 文件名称、解析状态、大小、上传时间
  * - 解析成功且已生成画像的简历可进入画像确认页（查看画像）
  * - 解析失败的简历展示失败原因
+ * - 可删除简历（软删除）：删除后列表不再展示，MinIO 文件与 Chroma 向量
+ *   由后台 CLEANUP 任务异步清理
  * - 已软删除的简历由后端查询层自动过滤，不会出现在列表中
  *
  * 数据来源：GET /api/resumes?page=&size=（后端只返回当前用户数据）
  */
 import {
   ArrowLeftOutlined,
+  DeleteOutlined,
   FilePdfOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
   Button,
+  Popconfirm,
   Space,
   Table,
   Tag,
   Tooltip,
   Typography,
+  message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { getResumeHistoryApi } from "../../features/resume";
+import { deleteResumeApi, getResumeHistoryApi } from "../../features/resume";
 import type { ResumeFile, ResumeFilePage } from "../../features/resume";
 
 /** 页面默认分页大小（与后端契约默认值一致） */
@@ -116,6 +121,20 @@ export default function ResumeHistoryPage() {
     void load(nextPage, nextSize);
   };
 
+  /**
+   * 删除简历（软删除，Task 7.2）。
+   * 删除成功后刷新当前页；若当前页因删除而空且非第一页，load 会自动回退到最后一页。
+   */
+  const handleDelete = async (record: ResumeFile) => {
+    try {
+      await deleteResumeApi(String(record.id));
+      message.success("简历已删除");
+      void load(page, pageSize);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "删除失败，请重试");
+    }
+  };
+
   const columns: ColumnsType<ResumeFile> = [
     {
       title: "文件名",
@@ -163,19 +182,40 @@ export default function ResumeHistoryPage() {
     {
       title: "操作",
       key: "actions",
-      width: 120,
-      render: (_, record) =>
-        record.parseStatus === "SUCCESS" && record.profileId ? (
-          <Button
-            size="small"
-            type="link"
-            onClick={() => navigate(`/resume/confirm/${record.profileId}`)}
+      width: 180,
+      render: (_, record) => (
+        <Space size={4}>
+          {record.parseStatus === "SUCCESS" && record.profileId ? (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => navigate(`/resume/confirm/${record.profileId}`)}
+            >
+              查看画像
+            </Button>
+          ) : (
+            <Typography.Text type="secondary">-</Typography.Text>
+          )}
+          {/* 删除为软删除：确认后调用后端删除接口，MinIO/Chroma 由后台清理任务异步处理 */}
+          <Popconfirm
+            title="删除该简历？"
+            description="删除后不可恢复，历史列表中不再展示。"
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void handleDelete(record)}
           >
-            查看画像
-          </Button>
-        ) : (
-          <Typography.Text type="secondary">-</Typography.Text>
-        ),
+            <Button
+              size="small"
+              type="link"
+              danger
+              icon={<DeleteOutlined aria-hidden="true" />}
+            >
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
     },
   ];
 

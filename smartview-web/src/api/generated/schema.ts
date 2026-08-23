@@ -272,7 +272,11 @@ export interface paths {
         get: operations["getInterviewSession"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * 删除面试会话（软删除）
+         * @description 同一事务内级联软删除会话及其全部子记录（报告、参考答案、问题、回答、评估）， 删除后历史列表不再展示；已删除记录保留（deleted=1）作为审计信息。
+         */
+        delete: operations["deleteInterviewSession"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1626,6 +1630,30 @@ export interface operations {
                     "application/json": components["schemas"]["InterviewSessionResponse"];
                 };
             };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteInterviewSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

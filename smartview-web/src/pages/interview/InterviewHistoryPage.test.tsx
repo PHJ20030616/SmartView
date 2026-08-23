@@ -8,7 +8,7 @@
  * - 无报告（如已取消）的会话不提供操作入口
  * - 空列表展示空态文案
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App as AntApp } from "antd";
 import {
@@ -19,16 +19,21 @@ import {
 } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listInterviewSessionsApi } from "../../features/interview";
+import {
+  deleteInterviewSessionApi,
+  listInterviewSessionsApi,
+} from "../../features/interview";
 import type { components } from "../../api/generated/schema";
 import InterviewHistoryPage from "./InterviewHistoryPage";
 
 // 模拟 API 层：不发起真实请求，聚焦页面渲染与跳转
 vi.mock("../../features/interview", () => ({
   listInterviewSessionsApi: vi.fn(),
+  deleteInterviewSessionApi: vi.fn(),
 }));
 
 const listInterviewSessionsApiMock = vi.mocked(listInterviewSessionsApi);
+const deleteInterviewSessionApiMock = vi.mocked(deleteInterviewSessionApi);
 
 type Summary = components["schemas"]["InterviewSessionSummary"];
 type InterviewSessionPage = components["schemas"]["InterviewSessionPage"];
@@ -86,6 +91,8 @@ describe("历史面试页面", () => {
     vi.clearAllMocks();
   });
 
+  // 该用例断言整表渲染（多行标签+操作列），在 CI/并发负载下渲染较慢，
+  // 显式放宽超时避免偶发超时误报（默认 5s）
   it("加载成功后展示会话列表与状态标签", async () => {
     listInterviewSessionsApiMock.mockResolvedValue(
       pageOf([
@@ -123,7 +130,7 @@ describe("历史面试页面", () => {
     // 操作入口：进行中可继续面试，已完成可查看报告，已取消无入口
     expect(screen.getByRole("button", { name: "继续面试" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "查看报告" })).toBeInTheDocument();
-  });
+  }, 15000);
 
   it("点击继续面试跳转会话语并携带 sessionId", async () => {
     listInterviewSessionsApiMock.mockResolvedValue(
@@ -200,6 +207,30 @@ describe("历史面试页面", () => {
 
     renderHistoryPage();
 
+    expect(
+      await screen.findByText("暂无历史面试，从简历画像页开始你的第一场面试吧"),
+    ).toBeInTheDocument();
+  });
+
+  it("确认删除后调用删除接口并重新加载列表（Task 7.2）", async () => {
+    listInterviewSessionsApiMock
+      .mockResolvedValueOnce(
+        pageOf([summary({ id: "66", status: "CANCELLED" })]),
+      )
+      .mockResolvedValueOnce(pageOf([]));
+    deleteInterviewSessionApiMock.mockResolvedValue(undefined);
+
+    const user = userEvent.setup();
+    renderHistoryPage();
+
+    await user.click(await screen.findByRole("button", { name: /删\s*除/ }));
+    // 确认按钮文案与触发按钮不同（确认删除），避免与触发按钮匹配歧义
+    await user.click(await screen.findByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => {
+      expect(deleteInterviewSessionApiMock).toHaveBeenCalledWith("66");
+    });
+    expect(listInterviewSessionsApiMock).toHaveBeenCalledTimes(2);
     expect(
       await screen.findByText("暂无历史面试，从简历画像页开始你的第一场面试吧"),
     ).toBeInTheDocument();

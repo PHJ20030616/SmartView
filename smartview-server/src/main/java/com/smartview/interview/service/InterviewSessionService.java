@@ -15,6 +15,8 @@ import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.CreateInterviewSessionRequest;
 import com.smartview.interview.dto.AnswerHistoryAssembler;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
+import com.smartview.interview.entity.AnswerEvaluation;
+import com.smartview.interview.entity.InterviewAnswer;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
 import com.smartview.interview.enums.InterviewQuestionStatus;
@@ -22,12 +24,17 @@ import com.smartview.interview.enums.InterviewQuestionType;
 import com.smartview.interview.enums.InterviewSessionStatus;
 import com.smartview.interview.enums.InterviewStage;
 import com.smartview.interview.enums.QuestionSourceType;
+import com.smartview.interview.mapper.AnswerEvaluationMapper;
+import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
+import com.smartview.report.entity.InterviewReport;
+import com.smartview.report.entity.ReferenceAnswer;
 import com.smartview.report.mapper.InterviewReportMapper;
+import com.smartview.report.mapper.ReferenceAnswerMapper;
 import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
@@ -80,9 +87,12 @@ public class InterviewSessionService {
 
     private final InterviewSessionMapper sessionMapper;
     private final InterviewQuestionMapper questionMapper;
+    private final InterviewAnswerMapper answerMapper;
+    private final AnswerEvaluationMapper evaluationMapper;
     private final ResumeProfileMapper resumeProfileMapper;
     private final ProfileAnalysisMapper profileAnalysisMapper;
     private final InterviewReportMapper reportMapper;
+    private final ReferenceAnswerMapper referenceAnswerMapper;
     private final StagePlanBuilder stagePlanBuilder;
     private final AiInterviewClient aiInterviewClient;
     private final InterviewSessionDtoMapper dtoMapper;
@@ -94,9 +104,12 @@ public class InterviewSessionService {
     public InterviewSessionService(
             InterviewSessionMapper sessionMapper,
             InterviewQuestionMapper questionMapper,
+            InterviewAnswerMapper answerMapper,
+            AnswerEvaluationMapper evaluationMapper,
             ResumeProfileMapper resumeProfileMapper,
             ProfileAnalysisMapper profileAnalysisMapper,
             InterviewReportMapper reportMapper,
+            ReferenceAnswerMapper referenceAnswerMapper,
             StagePlanBuilder stagePlanBuilder,
             AiInterviewClient aiInterviewClient,
             InterviewSessionDtoMapper dtoMapper,
@@ -106,9 +119,12 @@ public class InterviewSessionService {
             ReportTaskService reportTaskService) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
+        this.answerMapper = answerMapper;
+        this.evaluationMapper = evaluationMapper;
         this.resumeProfileMapper = resumeProfileMapper;
         this.profileAnalysisMapper = profileAnalysisMapper;
         this.reportMapper = reportMapper;
+        this.referenceAnswerMapper = referenceAnswerMapper;
         this.stagePlanBuilder = stagePlanBuilder;
         this.aiInterviewClient = aiInterviewClient;
         this.dtoMapper = dtoMapper;
@@ -168,6 +184,64 @@ public class InterviewSessionService {
         log.info("面试会话历史列表返回，userId={}, total={}, returned={}",
                 userId, result.getTotal(), items.size());
         return new com.smartview.generated.web.model.InterviewSessionPage(items, page, size, result.getTotal());
+    }
+
+    /**
+     * 软删除面试会话及其全部子记录（Task 7.2 软删除与物理清理）。
+     *
+     * <p>面试数据全部存储在 MySQL（会话/问题/回答/评估/报告/参考答案），无 MinIO
+     * 对象与 Chroma 向量，因此删除即同一事务内级联软删除子表记录（deleted=1），
+     * 保留行本身作为审计信息；历史列表由 @TableLogic 自动过滤已删除会话。</p>
+     *
+     * <p>级联范围：interview_report、reference_answer、interview_question、
+     * interview_answer、answer_evaluation，最后软删除会话本身。所有删除都是
+     * UPDATE 而非 DELETE，唯一索引（session_id, deleted）等约束不受影响。</p>
+     *
+     * @param userId    当前登录用户 ID
+     * @param sessionId 会话 ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteSession(Long userId, Long sessionId) {
+        InterviewSession session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ResponseCode.NOT_FOUND, "面试会话不存在");
+        }
+        if (!userId.equals(session.getUserId())) {
+            throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问该面试会话", HttpStatus.FORBIDDEN);
+        }
+
+        // 1. 报告与参考答案（一个会话最多一份有效报告，由唯一索引兜底）
+        List<com.smartview.report.entity.InterviewReport> reports = reportMapper.selectList(
+                new LambdaQueryWrapper<com.smartview.report.entity.InterviewReport>()
+                        .eq(com.smartview.report.entity.InterviewReport::getSessionId, sessionId));
+        for (com.smartview.report.entity.InterviewReport report : reports) {
+            referenceAnswerMapper.delete(
+                    new LambdaQueryWrapper<ReferenceAnswer>()
+                            .eq(ReferenceAnswer::getReportId, report.getId()));
+            reportMapper.deleteById(report.getId());
+        }
+
+        // 2. 问题、回答与评估（回答按问题 ID 批量软删；评估直接按会话 ID 软删）
+        List<InterviewQuestion> questions = questionMapper.selectList(
+                new LambdaQueryWrapper<InterviewQuestion>()
+                        .eq(InterviewQuestion::getSessionId, sessionId));
+        List<Long> questionIds = questions.stream().map(InterviewQuestion::getId).toList();
+        if (!questionIds.isEmpty()) {
+            answerMapper.delete(
+                    new LambdaQueryWrapper<InterviewAnswer>()
+                            .in(InterviewAnswer::getQuestionId, questionIds));
+        }
+        evaluationMapper.delete(
+                new LambdaQueryWrapper<AnswerEvaluation>()
+                        .eq(AnswerEvaluation::getSessionId, sessionId));
+        for (InterviewQuestion question : questions) {
+            questionMapper.deleteById(question.getId());
+        }
+
+        // 3. 会话本身最后软删
+        sessionMapper.deleteById(sessionId);
+        log.info("面试会话已软删除，userId={}, sessionId={}, questionCount={}, reportCount={}",
+                userId, sessionId, questions.size(), reports.size());
     }
 
     /**

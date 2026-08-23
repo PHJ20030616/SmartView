@@ -14,7 +14,9 @@ dependencies = [
   "PyMuPDF>=1.26.0",
   "pydantic-settings>=2.4.0",
   "PyYAML>=6.0.0",
-  "uvicorn[standard]>=0.30.0"
+  "uvicorn[standard]>=0.30.0",
+  # Task 7.2 清理任务：cleanup worker 直接删除 MinIO 对象
+  "minio>=7.2.0"
 ]
 
 [project.optional-dependencies]

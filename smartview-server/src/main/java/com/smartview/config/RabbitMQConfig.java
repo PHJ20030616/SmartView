@@ -134,6 +134,22 @@ public class RabbitMQConfig {
     private static final String QUEUE_REPORT_GENERATE_RESULT_DLQ = "smartview.report.generate.result.dlq";
     private static final String ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ = "report.generate.result.dlq";
 
+    // ==================== 清理任务/结果队列（Task 7.2 软删除与物理清理） ====================
+
+    /*
+     * 清理任务队列：简历删除时由 Spring 在软删除事务内投递，FastAPI cleanup worker 消费，
+     * 删除 MinIO 对象与对应画像的全部 Chroma 向量。任务消息不能因 worker 发布结果失败而
+     * 静默丢失，重试耗尽进入 DLQ 后由 CleanupRetryScheduler 依据 ai_task 租约再次投递。
+     */
+    public static final String QUEUE_CLEANUP = "smartview.cleanup.v1";
+    public static final String ROUTING_KEY_CLEANUP = "cleanup.task";
+    public static final String QUEUE_CLEANUP_RESULT = "smartview.cleanup.result.v1";
+    public static final String ROUTING_KEY_CLEANUP_RESULT = "cleanup.result";
+    private static final String QUEUE_CLEANUP_DLQ = "smartview.cleanup.dlq";
+    private static final String ROUTING_KEY_CLEANUP_DLQ = "cleanup.task.dlq";
+    private static final String QUEUE_CLEANUP_RESULT_DLQ = "smartview.cleanup.result.dlq";
+    private static final String ROUTING_KEY_CLEANUP_RESULT_DLQ = "cleanup.result.dlq";
+
     /**
      * 最大处理次数（首次消费 + 3 次重试 = 共 4 次机会）
      * SimpleRetryPolicy.setMaxAttempts 表示总尝试次数，包含首次消费
@@ -301,6 +317,43 @@ public class RabbitMQConfig {
                 .with(ROUTING_KEY_REPORT_GENERATE_RESULT);
     }
 
+    // ==================== 清理任务/结果队列（Task 7.2 软删除与物理清理） ====================
+
+    @Bean
+    public Queue cleanupQueue() {
+        // 清理任务消息不能因为 worker 发布结果失败而静默丢失；
+        // 进入 DLQ 后由 CleanupRetryScheduler 依据 ai_task 租约再次投递。
+        return QueueBuilder.durable(QUEUE_CLEANUP)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_CLEANUP_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding cleanupBinding() {
+        return BindingBuilder
+                .bind(cleanupQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_CLEANUP);
+    }
+
+    @Bean
+    public Queue cleanupResultQueue() {
+        // 清理结果消息业务校验失败（不可恢复）由消费者 reject 后路由到 DLQ，需人工或告警处理。
+        return QueueBuilder.durable(QUEUE_CLEANUP_RESULT)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_CLEANUP_RESULT_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding cleanupResultBinding() {
+        return BindingBuilder
+                .bind(cleanupResultQueue())
+                .to(smartviewDirectExchange())
+                .with(ROUTING_KEY_CLEANUP_RESULT);
+    }
+
     // ==================== 任务/结果死信队列 ====================
 
     @Bean
@@ -406,6 +459,43 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(reportGenerateResultDlq())
                 .to(deadLetterExchange())
                 .with(ROUTING_KEY_REPORT_GENERATE_RESULT_DLQ);
+    }
+
+    /**
+     * 清理任务队列的死信队列。
+     *
+     * 清理任务重试耗尽后转入（由清理任务队列 x-dead-letter-routing-key 路由），
+     * 供 CleanupRetryScheduler 依据 ai_task 租约再次投递，避免用户删除的
+     * MinIO/Chroma 数据永久残留。
+     */
+    @Bean
+    public Queue cleanupDlq() {
+        return new Queue(QUEUE_CLEANUP_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding cleanupDlqBinding() {
+        return BindingBuilder.bind(cleanupDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_CLEANUP_DLQ);
+    }
+
+    /**
+     * 清理结果队列的死信队列。
+     *
+     * 清理结果消息契约校验失败（不可恢复）由消费者 reject 后路由到此，
+     * 需人工或补偿调度消费，保证 ai_task 不会永久停留在非终态。
+     */
+    @Bean
+    public Queue cleanupResultDlq() {
+        return new Queue(QUEUE_CLEANUP_RESULT_DLQ, true, false, false);
+    }
+
+    @Bean
+    public Binding cleanupResultDlqBinding() {
+        return BindingBuilder.bind(cleanupResultDlq())
+                .to(deadLetterExchange())
+                .with(ROUTING_KEY_CLEANUP_RESULT_DLQ);
     }
 
     // ==================== 消费者容器工厂（带重试拦截器） ====================

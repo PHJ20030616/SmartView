@@ -14,6 +14,8 @@
 | `profile_analyze_result.schema.json` | PROFILE_ANALYZE_RESULT | 画像分析结果 |
 | `report_generate_task.schema.json` | REPORT_GENERATE_TASK | 报告生成任务 |
 | `report_generate_result.schema.json` | REPORT_GENERATE_RESULT | 报告生成结果 |
+| `cleanup_task.schema.json` | CLEANUP_TASK | 清理任务（删除 MinIO 文件与 Chroma 向量） |
+| `cleanup_result.schema.json` | CLEANUP_RESULT | 清理任务结果 |
 
 ## 公共字段规范
 
@@ -53,6 +55,8 @@
 | PROFILE_ANALYZE_RESULT | smartview.profile.analyze.result.v1 | 画像分析结果 |
 | REPORT_GENERATE_TASK | smartview.report.generate.task | 报告生成任务 |
 | REPORT_GENERATE_RESULT | smartview.report.generate.result | 报告生成结果 |
+| CLEANUP_TASK | smartview.cleanup.v1 | 清理任务（简历删除后删除 MinIO 文件与 Chroma 向量） |
+| CLEANUP_RESULT | smartview.cleanup.result.v1 | 清理任务结果 |
 
 ## 任务触发时序
 
@@ -60,6 +64,7 @@
 - **简历向量化任务**：用户确认简历后由 Spring Boot 创建并投递，FastAPI 消费后将简历切片写入 Chroma
 - **画像分析任务**：用户选择面试方向后，Spring Boot 先校验简历向量已成功入库，再创建并投递
 - **报告生成任务**：面试会话结束后由 Spring Boot 创建并投递
+- **清理任务**：简历删除时由 Spring Boot 在软删除事务内创建并投递，FastAPI 消费后删除 MinIO 文件与对应画像的全部 Chroma 向量
 
 ## 使用规范
 

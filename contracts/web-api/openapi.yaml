@@ -519,6 +519,31 @@ paths:
                 $ref: '#/components/schemas/InterviewSessionResponse'
         '404':
           $ref: '#/components/responses/NotFound'
+    delete:
+      tags:
+        - 面试
+      summary: 删除面试会话（软删除）
+      description: >
+        同一事务内级联软删除会话及其全部子记录（报告、参考答案、问题、回答、评估），
+        删除后历史列表不再展示；已删除记录保留（deleted=1）作为审计信息。
+      operationId: deleteInterviewSession
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /api/interview-sessions/{sessionId}/answers:
     post:

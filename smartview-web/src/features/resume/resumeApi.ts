@@ -90,6 +90,23 @@ export async function getResumeHistoryApi(
 }
 
 /**
+ * 删除简历文件（软删除，Task 7.2）
+ * DELETE /api/resumes/{resumeFileId}
+ *
+ * 删除成功后业务列表不再展示该简历；MinIO 文件与 Chroma 向量由后台
+ * CLEANUP 任务异步清理，无需前端等待。
+ */
+export async function deleteResumeApi(
+  resumeFileId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await request.delete<ApiResponseWrapper<null>>(
+    `/resumes/${resumeFileId}`,
+    { signal },
+  );
+}
+
+/**
  * 获取简历画像详情
  * GET /api/resume-profiles/{profileId}
  */

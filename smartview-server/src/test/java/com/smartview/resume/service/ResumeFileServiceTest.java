@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.smartview.cleanup.CleanupTaskService;
 import com.smartview.common.enums.ParseStatus;
 import com.smartview.common.enums.TaskStatus;
 import com.smartview.config.properties.ResumeProperties;
@@ -62,7 +63,7 @@ class ResumeFileServiceTest {
     private AiTaskMapper aiTaskMapper;
 
     @Mock
-    private ResumeVectorizationService resumeVectorizationService;
+    private CleanupTaskService cleanupTaskService;
 
     @Mock
     private MinioService minioService;
@@ -108,7 +109,7 @@ class ResumeFileServiceTest {
                 minioService,
                 resumeTaskProducer,
                 resumeProperties,
-                resumeVectorizationService,
+                cleanupTaskService,
                 transactionTemplate
         );
         TransactionSynchronizationManager.initSynchronization();
@@ -180,7 +181,7 @@ class ResumeFileServiceTest {
     }
 
     @Test
-    void deleteResume_shouldSoftDeleteAllProfilesAndScheduleDerivedDataCleanup() {
+    void deleteResume_shouldSoftDeleteAllProfilesAndRegisterSingleCleanupTask() {
         ResumeFile resumeFile = ResumeFile.builder()
                 .id(88L)
                 .userId(7L)
@@ -204,16 +205,14 @@ class ResumeFileServiceTest {
 
         service.deleteResume(88L, 7L);
 
-        verify(resumeVectorizationService).ensureDeleteTask(firstProfile);
-        verify(resumeVectorizationService).ensureDeleteTask(secondProfile);
+        // 统一清理任务（MinIO + 全部画像向量）与软删除在同一事务内登记
+        verify(cleanupTaskService).ensureCleanupTask(88L, "resumes/7/old-resume.pdf",
+                List.of(101L, 102L), 7L);
         verify(resumeProfileMapper).deleteById(101L);
         verify(resumeProfileMapper).deleteById(102L);
         verify(resumeFileMapper).deleteById(88L);
+        // MinIO 删除由后台 cleanup worker 负责，不再在提交后同步删除
         verify(minioService, never()).deleteFile(any());
-
-        runAfterCommitCallbacks();
-
-        verify(minioService).deleteFile("resumes/7/old-resume.pdf");
     }
 
     @Test
@@ -227,7 +226,7 @@ class ResumeFileServiceTest {
 
         verify(resumeProfileMapper, never()).selectList(any());
         verify(resumeFileMapper, never()).deleteById(anyLong());
-        verify(resumeVectorizationService, never()).ensureDeleteTask(any());
+        verify(cleanupTaskService, never()).ensureCleanupTask(anyLong(), any(), any(), anyLong());
     }
 
     @Test

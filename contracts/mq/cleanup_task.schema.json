@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CleanupTask",
+  "description": "清理任务消息：后台清理任务据此删除简历文件关联的 MinIO 对象与 Chroma 向量",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "bizType",
+    "bizId",
+    "objectKey"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["CLEANUP_TASK"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "当前重试次数，初始为 0，消费失败后递增"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "bizType": {
+      "type": "string",
+      "enum": ["RESUME_FILE"],
+      "description": "关联业务类型：RESUME_FILE=简历文件（扩展其他类型时追加枚举）"
+    },
+    "bizId": {
+      "type": "string",
+      "description": "关联业务 ID：bizType=RESUME_FILE 时为 resume_file.id"
+    },
+    "objectKey": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MinIO 对象 Key，如 resumes/1/xxx.pdf；对象不存在时按已清理处理（幂等）"
+    },
+    "resumeProfileIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "简历画像 ID（resume_profile.id），对应画像的全部历史版本切片需从 Chroma 删除"
+      },
+      "description": "需清理 Chroma 向量的简历画像 ID 列表；可为空数组（简历解析失败无画像时仅清理 MinIO 文件）"
+    }
+  }
+}

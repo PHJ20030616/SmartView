@@ -2,6 +2,7 @@ package com.smartview.common.validation;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartview.cleanup.CleanupResultMessage;
 import com.smartview.task.mq.ReportGenerateResultMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,13 +11,14 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * SchemaValidator 契约校验测试（report_generate_result 消息）。
+ * SchemaValidator 契约校验测试（report_generate_result / cleanup_result 消息）。
  *
- * 使用真实 ObjectMapper 构造 SchemaValidator 并调用 init() 从 classpath 加载 4 个
+ * 使用真实 ObjectMapper 构造 SchemaValidator 并调用 init() 从 classpath 加载全部
  * 结果 Schema（resume_parse_result / resume_vectorize_result / profile_analyze_result /
- * report_generate_result），验证：
- * - success=true 成功消息必须携带全部 11 个内容字段（reportId/overallScore/.../referenceAnswers）；
+ * report_generate_result / cleanup_result），验证：
+ * - success=true 成功消息必须携带全部内容字段（reportId/overallScore/.../referenceAnswers）；
  * - success=false 失败消息必须携带 errorMessage；
+ * - cleanup_result：success=true 必须携带 cleanedProfileCount，success=false 必须携带 errorMessage；
  * - 缺任一必填内容字段即抛 IllegalArgumentException。
  */
 class SchemaValidatorTest {
@@ -30,6 +32,37 @@ class SchemaValidatorTest {
         objectMapper = new ObjectMapper();
         validator = new SchemaValidator(objectMapper);
         validator.init();
+    }
+
+    private CleanupResultMessage cleanupSuccessMessage() {
+        return CleanupResultMessage.builder()
+                .taskId("00000000-0000-0000-0000-000000000301")
+                .traceId("00000000-0000-0000-0000-000000000031")
+                .messageType("CLEANUP_RESULT")
+                .schemaVersion("1.0.0")
+                .retryCount(0)
+                // 结果消息 createdAt 为 RFC 3339 字符串（透传 worker 时间），与任务消息的 LocalDateTime 区分
+                .createdAt("2026-08-20T10:30:00+08:00")
+                .bizType("RESUME_FILE")
+                .bizId("88")
+                .success(true)
+                .cleanedProfileCount(2)
+                .build();
+    }
+
+    private CleanupResultMessage cleanupFailureMessage() {
+        return CleanupResultMessage.builder()
+                .taskId("00000000-0000-0000-0000-000000000301")
+                .traceId("00000000-0000-0000-0000-000000000031")
+                .messageType("CLEANUP_RESULT")
+                .schemaVersion("1.0.0")
+                .retryCount(0)
+                .createdAt("2026-08-20T10:30:00+08:00")
+                .bizType("RESUME_FILE")
+                .bizId("88")
+                .success(false)
+                .errorMessage("MinIO 不可用")
+                .build();
     }
 
     private ReportGenerateResultMessage successMessage() throws Exception {
@@ -75,9 +108,40 @@ class SchemaValidatorTest {
     }
 
     @Test
-    void init_loadsAllFourSchemas() {
-        // init() 已执行成功即证明 4 个结果 Schema 均从 classpath 加载（缺任何一个都会抛异常）
+    void init_loadsAllSchemas() {
+        // init() 已执行成功即证明全部结果 Schema 均从 classpath 加载（缺任何一个都会抛异常）
         assertThatCode(() -> validator.init()).doesNotThrowAnyException();
+    }
+
+    @Test
+    void cleanupSuccessResultWithCleanedCountPasses() {
+        // cleanup_result：success=true 且携带 cleanedProfileCount → 契约校验通过
+        assertThatCode(() -> validator.validateCleanupResult(cleanupSuccessMessage()))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void cleanupSuccessResultMissingCleanedCountIsRejected() {
+        CleanupResultMessage message = cleanupSuccessMessage();
+        message.setCleanedProfileCount(null);
+        assertThatThrownBy(() -> validator.validateCleanupResult(message))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("校验失败");
+    }
+
+    @Test
+    void cleanupFailureResultMissingErrorMessageIsRejected() {
+        CleanupResultMessage message = cleanupFailureMessage();
+        message.setErrorMessage(null);
+        assertThatThrownBy(() -> validator.validateCleanupResult(message))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("校验失败");
+    }
+
+    @Test
+    void cleanupFailureResultWithErrorMessagePasses() {
+        assertThatCode(() -> validator.validateCleanupResult(cleanupFailureMessage()))
+                .doesNotThrowAnyException();
     }
 
     @Test

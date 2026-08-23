@@ -1,22 +1,37 @@
 /**
- * 历史面试页面（Task 7.1）
+ * 历史面试页面（Task 7.1 / Task 7.2）
  *
  * 展示当前用户创建过的全部面试会话历史（分页）：
  * - 面试方向、会话状态、已提问数量、报告状态、创建时间
  * - 进行中的会话（IN_PROGRESS）可"继续面试"，进入会话页恢复现场
  * - 已结束且已生成报告的会话（COMPLETED/REPORTING）可"查看报告"
+ * - 可删除会话（软删除）：删除后历史列表不再展示，子记录（问题/回答/评估/报告）
+ *   一并软删
  * - 已软删除的会话由后端查询层自动过滤，不会出现在列表中
  *
  * 数据来源：GET /api/interview-sessions?page=&size=（后端只返回当前用户数据）
  */
-import { ArrowLeftOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Space, Table, Tag, Typography } from "antd";
+import { ArrowLeftOutlined, DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Popconfirm,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { components } from "../../api/generated/schema";
-import { listInterviewSessionsApi } from "../../features/interview";
+import {
+  deleteInterviewSessionApi,
+  listInterviewSessionsApi,
+} from "../../features/interview";
 
 type InterviewSessionSummary = components["schemas"]["InterviewSessionSummary"];
 type InterviewSessionPage = components["schemas"]["InterviewSessionPage"];
@@ -124,6 +139,20 @@ export default function InterviewHistoryPage() {
     void load(nextPage, nextSize);
   };
 
+  /**
+   * 删除面试会话（软删除，Task 7.2）。
+   * 删除成功后刷新当前页；若当前页因删除而空且非第一页，load 会自动回退到最后一页。
+   */
+  const handleDelete = async (record: InterviewSessionSummary) => {
+    try {
+      await deleteInterviewSessionApi(String(record.id));
+      message.success("面试记录已删除");
+      void load(page, pageSize);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "删除失败，请重试");
+    }
+  };
+
   const columns: ColumnsType<InterviewSessionSummary> = [
     {
       title: "面试方向",
@@ -175,11 +204,12 @@ export default function InterviewHistoryPage() {
     {
       title: "操作",
       key: "actions",
-      width: 140,
+      width: 200,
       render: (_, record) => {
-        // 进行中的会话：进入会话页按 sessionId 恢复现场
+        // 主操作：进行中可继续面试；已结束且有报告可查看报告
+        let primary: ReactNode = <Typography.Text type="secondary">-</Typography.Text>;
         if (record.status === "IN_PROGRESS") {
-          return (
+          primary = (
             <Button
               size="small"
               type="link"
@@ -190,10 +220,11 @@ export default function InterviewHistoryPage() {
               继续面试
             </Button>
           );
-        }
-        // 已结束且有报告（生成中/成功/失败均可进入报告页，报告页自会轮询或重试）
-        if (record.reportId && (record.status === "COMPLETED" || record.status === "REPORTING")) {
-          return (
+        } else if (
+          record.reportId &&
+          (record.status === "COMPLETED" || record.status === "REPORTING")
+        ) {
+          primary = (
             <Button
               size="small"
               type="link"
@@ -205,7 +236,29 @@ export default function InterviewHistoryPage() {
             </Button>
           );
         }
-        return <Typography.Text type="secondary">-</Typography.Text>;
+        return (
+          <Space size={4}>
+            {primary}
+            {/* 删除为软删除：确认后调用后端接口，会话与子记录一并软删 */}
+            <Popconfirm
+              title="删除该面试记录？"
+              description="删除后不可恢复，历史列表中不再展示。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void handleDelete(record)}
+            >
+              <Button
+                size="small"
+                type="link"
+                danger
+                icon={<DeleteOutlined aria-hidden="true" />}
+              >
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
       },
     },
   ];

@@ -14,16 +14,23 @@ import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.CreateInterviewSessionRequest;
 import com.smartview.interview.dto.AnswerHistoryAssembler;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
+import com.smartview.interview.entity.AnswerEvaluation;
+import com.smartview.interview.entity.InterviewAnswer;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
 import com.smartview.interview.enums.InterviewSessionStatus;
+import com.smartview.interview.mapper.AnswerEvaluationMapper;
+import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
 import com.smartview.report.enums.ReportStatus;
+import com.smartview.report.entity.InterviewReport;
+import com.smartview.report.entity.ReferenceAnswer;
 import com.smartview.report.mapper.InterviewReportMapper;
+import com.smartview.report.mapper.ReferenceAnswerMapper;
 import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
@@ -42,6 +49,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
@@ -68,11 +76,17 @@ class InterviewSessionServiceTest {
     @Mock
     private InterviewQuestionMapper questionMapper;
     @Mock
+    private InterviewAnswerMapper answerMapper;
+    @Mock
+    private AnswerEvaluationMapper evaluationMapper;
+    @Mock
     private ResumeProfileMapper resumeProfileMapper;
     @Mock
     private ProfileAnalysisMapper profileAnalysisMapper;
     @Mock
     private InterviewReportMapper reportMapper;
+    @Mock
+    private ReferenceAnswerMapper referenceAnswerMapper;
     @Mock
     private AiInterviewClient aiInterviewClient;
     @Mock
@@ -89,17 +103,25 @@ class InterviewSessionServiceTest {
     private String insertedSessionStatus;
 
     /**
-     * 初始化 InterviewSession 的 MyBatis-Plus 表元数据（Lambda 缓存）。
+     * 初始化所有被服务层查询的实体 TableInfo（Lambda 缓存）。
      *
-     * 纯 Mockito 单测没有 MyBatis-Plus 启动流程，LambdaUpdateWrapper 的列名解析
-     * 依赖 TableInfoHelper 构建的缓存（getSqlSet/getSqlSegment 触发），
-     * 此处手动初始化以便断言条件更新的 WHERE/SET 片段。
+     * 纯 Mockito 单测没有 MyBatis-Plus 启动流程，LambdaQueryWrapper/LambdaUpdateWrapper
+     * 的列名解析依赖 TableInfoHelper 构建的缓存（getSqlSet/getSqlSegment 触发）。
+     * 此处一次性初始化服务层涉及的全部实体，避免测试执行顺序导致缓存缺失
+     * （MybatisPlus can not find lambda cache for this entity）。
      */
     @BeforeAll
     static void initMybatisPlusTableInfo() {
-        TableInfoHelper.initTableInfo(
-                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
-                InterviewSession.class);
+        MapperBuilderAssistant assistant =
+                new MapperBuilderAssistant(new MybatisConfiguration(), "");
+        TableInfoHelper.initTableInfo(assistant, InterviewSession.class);
+        TableInfoHelper.initTableInfo(assistant, InterviewQuestion.class);
+        TableInfoHelper.initTableInfo(assistant, InterviewAnswer.class);
+        TableInfoHelper.initTableInfo(assistant, AnswerEvaluation.class);
+        TableInfoHelper.initTableInfo(assistant, InterviewReport.class);
+        TableInfoHelper.initTableInfo(assistant, ReferenceAnswer.class);
+        TableInfoHelper.initTableInfo(assistant, ResumeProfile.class);
+        TableInfoHelper.initTableInfo(assistant, ProfileAnalysis.class);
     }
 
     @BeforeEach
@@ -109,9 +131,12 @@ class InterviewSessionServiceTest {
         service = new InterviewSessionService(
                 sessionMapper,
                 questionMapper,
+                answerMapper,
+                evaluationMapper,
                 resumeProfileMapper,
                 profileAnalysisMapper,
                 reportMapper,
+                referenceAnswerMapper,
                 new StagePlanBuilder(objectMapper),
                 aiInterviewClient,
                 new InterviewSessionDtoMapper(),
@@ -661,5 +686,82 @@ class InterviewSessionServiceTest {
         // 无报告（如已取消）：报告字段为空，前端展示"-"而非可点击入口
         assertThat(summary.getReportId()).isNull();
         assertThat(summary.getReportStatus()).isNull();
+    }
+
+    // ==================== deleteSession（Task 7.2 软删除与物理清理） ====================
+
+    @Test
+    void deleteSession_级联软删子表并软删会话() {
+        InterviewSession session = InterviewSession.builder()
+                .id(66L).userId(7L).resumeProfileId(10L)
+                .roleDirection(RoleDirection.JAVA_BACKEND.getCode())
+                .status(InterviewSessionStatus.COMPLETED.getCode())
+                .build();
+        InterviewReport report = InterviewReport.builder().id(500L).sessionId(66L).userId(7L).build();
+        InterviewQuestion question = InterviewQuestion.builder().id(900L).sessionId(66L).userId(7L).build();
+        when(sessionMapper.selectById(66L)).thenReturn(session);
+        when(reportMapper.selectList(any())).thenReturn(List.of(report));
+        when(questionMapper.selectList(any())).thenReturn(List.of(question));
+
+        service.deleteSession(7L, 66L);
+
+        // 参考答案按报告 ID 软删，报告本身软删
+        verify(referenceAnswerMapper).delete(any(LambdaQueryWrapper.class));
+        verify(reportMapper).deleteById(500L);
+        // 回答按问题 ID 范围软删，评估按会话 ID 软删，问题逐条软删
+        verify(answerMapper).delete(any(LambdaQueryWrapper.class));
+        verify(evaluationMapper).delete(any(LambdaQueryWrapper.class));
+        verify(questionMapper).deleteById(900L);
+        // 会话最后软删
+        verify(sessionMapper).deleteById(66L);
+    }
+
+    @Test
+    void deleteSession_无报告无问题时仅软删会话() {
+        InterviewSession session = InterviewSession.builder()
+                .id(66L).userId(7L).resumeProfileId(10L)
+                .roleDirection(RoleDirection.JAVA_BACKEND.getCode())
+                .status(InterviewSessionStatus.IN_PROGRESS.getCode())
+                .build();
+        when(sessionMapper.selectById(66L)).thenReturn(session);
+        when(reportMapper.selectList(any())).thenReturn(List.of());
+        when(questionMapper.selectList(any())).thenReturn(List.of());
+
+        service.deleteSession(7L, 66L);
+
+        verify(sessionMapper).deleteById(66L);
+        // 评估按会话 ID 无条件软删（与问题是否存在无关）
+        verify(evaluationMapper).delete(any());
+        // 回答按问题 ID 范围软删，无问题时不调用
+        verify(answerMapper, never()).delete(any());
+        verify(reportMapper, never()).deleteById(anyLong());
+        verify(questionMapper, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void deleteSession_非本人会话拒绝删除() {
+        InterviewSession session = InterviewSession.builder()
+                .id(66L).userId(7L).resumeProfileId(10L)
+                .roleDirection(RoleDirection.JAVA_BACKEND.getCode())
+                .status(InterviewSessionStatus.COMPLETED.getCode())
+                .build();
+        when(sessionMapper.selectById(66L)).thenReturn(session);
+
+        assertThatThrownBy(() -> service.deleteSession(99L, 66L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("无权访问该面试会话");
+
+        verify(sessionMapper, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void deleteSession_会话不存在返回404() {
+        when(sessionMapper.selectById(66L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.deleteSession(7L, 66L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("面试会话不存在");
+
+        verify(sessionMapper, never()).deleteById(anyLong());
     }
 }

@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CleanupResult",
+  "description": "清理任务结果消息：FastAPI cleanup worker 执行完物理清理后回传给 Spring Boot，用于更新 ai_task 状态与审计",
+  "type": "object",
+  "required": [
+    "taskId",
+    "traceId",
+    "messageType",
+    "schemaVersion",
+    "retryCount",
+    "createdAt",
+    "bizType",
+    "bizId",
+    "success"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "任务唯一标识"
+    },
+    "traceId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "链路追踪 ID"
+    },
+    "messageType": {
+      "type": "string",
+      "enum": ["CLEANUP_RESULT"],
+      "description": "消息类型"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"],
+      "description": "Schema 版本号"
+    },
+    "retryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "任务最终重试次数"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "消息创建时间"
+    },
+    "bizType": {
+      "type": "string",
+      "enum": ["RESUME_FILE"],
+      "description": "关联业务类型，与任务消息一致"
+    },
+    "bizId": {
+      "type": "string",
+      "description": "关联业务 ID，与任务消息一致"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "是否清理成功"
+    },
+    "cleanedProfileCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "成功清理的画像数量（含按幂等视为已清理的画像）"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "失败原因；success=false 时必填"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "success": { "const": true } } },
+      "then": { "required": ["cleanedProfileCount"] }
+    },
+    {
+      "if": { "properties": { "success": { "const": false } } },
+      "then": { "required": ["errorMessage"] }
+    }
+  ]
+}

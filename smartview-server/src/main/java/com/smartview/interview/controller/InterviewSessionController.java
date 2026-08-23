@@ -7,6 +7,7 @@ import com.smartview.interview.service.InterviewSessionService;
 import com.smartview.security.SecurityContextHolder;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * - POST /api/interview-sessions：创建面试会话，返回首题与进度范围
  * - GET /api/interview-sessions/{sessionId}：获取会话详情，页面刷新后恢复当前题目
  * - POST /api/interview-sessions/{sessionId}/finish：提前结束面试（转为 COMPLETED）
+ * - DELETE /api/interview-sessions/{sessionId}：软删除会话及其全部子记录（Task 7.2）
  *
  * 业务规则：
  * - 自动从安全上下文解析当前用户，用户只能操作自己的会话/画像
@@ -85,5 +87,19 @@ public class InterviewSessionController {
         log.info("收到提前结束面试请求，userId={}, sessionId={}", userId, sessionId);
         InterviewSession response = interviewSessionService.finishSession(userId, sessionId);
         return ApiResponse.success(response);
+    }
+
+    /**
+     * 软删除面试会话（Task 7.2）。
+     *
+     * 接口契约：DELETE /api/interview-sessions/{sessionId}
+     * 同一事务内级联软删报告、参考答案、问题、回答与评估，随后历史列表不再展示该会话。
+     */
+    @DeleteMapping("/{sessionId}")
+    public ApiResponse<Void> deleteSession(@PathVariable Long sessionId) {
+        Long userId = SecurityContextHolder.getCurrentUserId();
+        log.info("收到删除面试会话请求，userId={}, sessionId={}", userId, sessionId);
+        interviewSessionService.deleteSession(userId, sessionId);
+        return ApiResponse.success(null);
     }
 }

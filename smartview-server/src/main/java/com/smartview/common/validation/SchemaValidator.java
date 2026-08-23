@@ -70,6 +70,14 @@ public class SchemaValidator {
      */
     private JsonSchema reportGenerateResultSchema;
 
+    /**
+     * 清理任务结果 Schema，启动时强制加载（Task 7.2 软删除与物理清理）。
+     *
+     * 清理结果会驱动 ai_task 的终态更新并作为审计载荷保存，必须先通过契约校验，
+     * 避免字段缺失或业务类型错误误写任务状态。
+     */
+    private JsonSchema cleanupResultSchema;
+
     public SchemaValidator(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -110,7 +118,13 @@ public class SchemaValidator {
                     "无法加载 report_generate_result.schema.json，"
                             + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
         }
-        log.info("resume_parse_result、resume_vectorize_result、profile_analyze_result 和 report_generate_result Schema 加载成功");
+        cleanupResultSchema = loadSchema("/contracts/mq/cleanup_result.schema.json");
+        if (cleanupResultSchema == null) {
+            throw new IllegalStateException(
+                    "无法加载 cleanup_result.schema.json，"
+                            + "请确认该文件已正确打包到 classpath:contracts/mq/ 目录下");
+        }
+        log.info("resume_parse_result、resume_vectorize_result、profile_analyze_result、report_generate_result 和 cleanup_result Schema 加载成功");
     }
 
     /**
@@ -153,6 +167,16 @@ public class SchemaValidator {
      */
     public void validateReportGenerateResult(Object message) {
         validate(message, reportGenerateResultSchema);
+    }
+
+    /**
+     * 校验清理任务结果消息是否符合契约定义。
+     *
+     * @param message 待校验的消息对象
+     * @throws IllegalArgumentException 校验失败时抛出
+     */
+    public void validateCleanupResult(Object message) {
+        validate(message, cleanupResultSchema);
     }
 
     /**
