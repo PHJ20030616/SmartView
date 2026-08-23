@@ -312,8 +312,7 @@ body {
 .interview-toolbar,
 .interview-conversation,
 .interview-composer,
-.report-list-panel,
-.report-empty-panel {
+.report-list-panel {
   border: 0;
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(31, 45, 61, 0.08);
@@ -885,20 +884,6 @@ body {
   }
 }
 
-.report-empty-panel {
-  min-height: 430px;
-  padding: 28px;
-}
-
-.report-empty-panel .ant-empty {
-  margin: 90px 0;
-}
-
-.report-empty-panel .ant-empty-description {
-  color: #7a8798;
-  font-size: 17px;
-}
-
 .report-preview-hint {
   display: flex;
   align-items: center;
@@ -1052,12 +1037,6 @@ body {
 
 
 /* ============ 报告页 ============ */
-.report-empty-icon {
-  display: block;
-  margin: 90px auto 16px;
-  color: #c7d1dc;
-  font-size: 64px;
-}
 .report-overview-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

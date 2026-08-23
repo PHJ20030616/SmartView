@@ -11,6 +11,7 @@ interface ApiResponseWrapper<T> {
 }
 
 type InterviewReport = components["schemas"]["InterviewReport"];
+type InterviewReportPage = components["schemas"]["InterviewReportPage"];
 
 /**
  * 安全提取响应数据，data 为 null 时抛明确错误。
@@ -21,6 +22,19 @@ function extractData<T>(wrapper: ApiResponseWrapper<T>, endpoint: string): T {
     throw new Error(`接口 ${endpoint} 返回数据为空`);
   }
   return wrapper.data;
+}
+
+/** 查询报告历史列表 GET /api/reports?page=&size=（报告页无参数入口首拉） */
+export async function listReportsApi(
+  page: number,
+  size: number,
+  signal?: AbortSignal,
+): Promise<InterviewReportPage> {
+  const response = await request.get<ApiResponseWrapper<InterviewReportPage>>(
+    "/reports",
+    { params: { page, size }, signal },
+  );
+  return extractData(response.data, "/reports");
 }
 
 /** 按会话查询报告 GET /api/interview-sessions/{sessionId}/report（面试结束页首拉入口） */

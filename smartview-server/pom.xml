@@ -182,7 +182,7 @@
                             <generateModelTests>false</generateModelTests>
                             <generateSupportingFiles>false</generateSupportingFiles>
                             <globalProperties>
-                                <models>RegisterRequest,LoginRequest,UserInfo,LoginData,CreateInterviewSessionRequest,InterviewSessionResponse,InterviewSession,InterviewSessionSummary,InterviewSessionPage,InterviewSessionListResponse,InterviewQuestion,SubmitAnswerRequest,SubmitAnswerData,AnswerEvaluation,AnswerHistoryItem,InterviewReport,ReportCoverage,ReferenceAnswer,ReportSuggestion,AnswerTradeoff,ResumeFile,ResumeFilePage,ResumeFileListResponse</models>
+                                <models>RegisterRequest,LoginRequest,UserInfo,LoginData,CreateInterviewSessionRequest,InterviewSessionResponse,InterviewSession,InterviewSessionSummary,InterviewSessionPage,InterviewSessionListResponse,InterviewQuestion,SubmitAnswerRequest,SubmitAnswerData,AnswerEvaluation,AnswerHistoryItem,InterviewReport,InterviewReportSummary,InterviewReportPage,InterviewReportListResponse,ReportCoverage,ReferenceAnswer,ReportSuggestion,AnswerTradeoff,ResumeFile,ResumeFilePage,ResumeFileListResponse</models>
                             </globalProperties>
                             <configOptions>
                                 <sourceFolder>src/main/java</sourceFolder>

@@ -19,7 +19,8 @@ import { useNavigate } from "react-router-dom";
 
 /**
  * 首页的四步流程只表达产品当前的操作顺序，不依赖后端状态接口。
- * 面试和报告在当前版本仍未接入真实请求，因此以锁定态展示，避免误导用户。
+ * 模拟面试入口在当前版本仍以锁定态展示，避免误导用户；
+ * 复盘报告入口已解锁，进入后展示历史报告列表。
  */
 const actions = [
   {
@@ -41,7 +42,7 @@ const actions = [
     description: "查看准备度、风险点、学习建议和参考答案。",
     path: "/report",
     icon: <PieChartOutlined />,
-    locked: true,
+    locked: false,
   },
 ];
 

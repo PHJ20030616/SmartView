@@ -1,7 +1,9 @@
 package com.smartview.report.service;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.generated.web.model.InterviewReport;
 import com.smartview.interview.dto.AnswerHistoryAssembler;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -132,6 +135,65 @@ class ReportQueryServiceTest {
         when(reportMapper.selectById(88L)).thenReturn(reportEntity());
         assertThatThrownBy(() -> service.getReport(99L, 88L))
                 .hasMessageContaining("无权访问该面试报告");
+    }
+
+    @Test
+    void listReports_分页返回当前用户报告摘要() {
+        Page<com.smartview.report.entity.InterviewReport> page = new Page<>(1, 10);
+        page.setRecords(List.of(reportEntity()));
+        page.setTotal(1);
+        when(reportMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(sessionMapper.selectBatchIds(List.of(66L))).thenReturn(List.of(sessionEntity()));
+
+        com.smartview.generated.web.model.InterviewReportPage result = service.listReports(7L, 1, 10);
+
+        // 授权边界关键断言：分页查询必须按 userId 精确过滤（且按创建时间倒序）。
+        // 若未来误删 .eq(userId) 会导致接口返回全部用户数据，此处必须守住。
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaQueryWrapper<com.smartview.report.entity.InterviewReport>> captor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(reportMapper).selectPage(any(Page.class), captor.capture());
+        LambdaQueryWrapper<com.smartview.report.entity.InterviewReport> wrapper = captor.getValue();
+        // SQL 段使用 MyBatis-Plus 命名占位符（#{ew.paramNameValuePairs.xxx}），
+        // 此处断言列名与排序方向即可；参数值由下方 paramNameValuePairs 精确校验
+        assertThat(wrapper.getSqlSegment())
+                .contains("user_id")
+                .contains("ORDER BY created_at DESC");
+        // 过滤参数值必须是当前用户 ID（而非其他用户/空值）
+        assertThat(wrapper.getParamNameValuePairs().values()).contains(7L);
+
+        assertThat(result.getItems()).hasSize(1);
+        com.smartview.generated.web.model.InterviewReportSummary item = result.getItems().get(0);
+        assertThat(item.getId()).isEqualTo("88");
+        assertThat(item.getSessionId()).isEqualTo("66");
+        // 摘要模型使用独立枚举类，需按摘要枚举断言
+        assertThat(item.getRoleDirection()).isEqualTo(
+                com.smartview.generated.web.model.InterviewReportSummary.RoleDirectionEnum.JAVA_BACKEND);
+        assertThat(item.getStatus()).isEqualTo(
+                com.smartview.generated.web.model.InterviewReportSummary.StatusEnum.SUCCESS);
+        assertThat(item.getOverallScore()).isEqualTo(76);
+        assertThat(item.getReadinessLevel()).isEqualTo(
+                com.smartview.generated.web.model.InterviewReportSummary.ReadinessLevelEnum.READY);
+        assertThat(item.getRoleFitScore()).isEqualTo(82);
+        assertThat(item.getSummary()).isEqualTo("整体表现良好");
+        assertThat(result.getPage()).isEqualTo(1);
+        assertThat(result.getSize()).isEqualTo(10);
+        assertThat(result.getTotal()).isEqualTo(1L);
+    }
+
+    @Test
+    void listReports_会话缺失时方向字段缺省不阻断列表() {
+        Page<com.smartview.report.entity.InterviewReport> page = new Page<>(1, 10);
+        page.setRecords(List.of(reportEntity()));
+        page.setTotal(1);
+        when(reportMapper.selectPage(any(), any())).thenReturn(page);
+        // 会话数据异常缺失：selectBatchIds 返回空，方向字段应为 null 而非抛错
+        when(sessionMapper.selectBatchIds(List.of(66L))).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewReportPage result = service.listReports(7L, 1, 10);
+
+        assertThat(result.getItems()).hasSize(1);
+        assertThat(result.getItems().get(0).getRoleDirection()).isNull();
     }
 
     @Test

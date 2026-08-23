@@ -7,6 +7,7 @@ import type { components } from "../../api/generated/schema";
 import {
   fetchReport,
   fetchReportBySession,
+  fetchReportList,
   ReportError,
   retryReport,
   waitForReport,
@@ -14,6 +15,7 @@ import {
 import ReportPage from "./ReportPage";
 
 type InterviewReport = components["schemas"]["InterviewReport"];
+type InterviewReportSummary = components["schemas"]["InterviewReportSummary"];
 
 vi.mock("../../features/report", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../features/report")>();
@@ -21,6 +23,7 @@ vi.mock("../../features/report", async (importOriginal) => {
     ...actual,
     fetchReportBySession: vi.fn(),
     fetchReport: vi.fn(),
+    fetchReportList: vi.fn(),
     retryReport: vi.fn(),
     waitForReport: vi.fn(),
   };
@@ -28,6 +31,7 @@ vi.mock("../../features/report", async (importOriginal) => {
 
 const fetchBySessionMock = vi.mocked(fetchReportBySession);
 const fetchReportMock = vi.mocked(fetchReport);
+const fetchReportListMock = vi.mocked(fetchReportList);
 const retryReportMock = vi.mocked(retryReport);
 const waitForReportMock = vi.mocked(waitForReport);
 
@@ -67,6 +71,24 @@ function report(overrides: Partial<InterviewReport> = {}): InterviewReport {
   } as InterviewReport;
 }
 
+/** 报告历史摘要（列表专用轻量模型）测试夹具 */
+function summary(overrides: Partial<InterviewReportSummary> = {}): InterviewReportSummary {
+  return {
+    id: "88",
+    sessionId: "66",
+    userId: "7",
+    roleDirection: "JAVA_BACKEND",
+    overallScore: 76,
+    readinessLevel: "READY",
+    roleFitScore: 82,
+    summary: "整体表现良好",
+    status: "SUCCESS",
+    generatedAt: "2026-08-20T10:00:00+08:00",
+    createdAt: "2026-08-20T09:00:00+08:00",
+    ...overrides,
+  } as InterviewReportSummary;
+}
+
 function renderPage(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -80,9 +102,45 @@ function renderPage(path: string) {
 describe("报告页面", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("无参数时展示空态引导", () => {
+  it("无参数时展示报告历史列表（空列表空态）", async () => {
+    fetchReportListMock.mockResolvedValue({ items: [], page: 1, size: 10, total: 0 });
     renderPage("/report");
-    expect(screen.getByText(/完成一次模拟面试后/)).toBeTruthy();
+    expect(await screen.findByText(/暂无报告/)).toBeTruthy();
+    expect(fetchReportListMock).toHaveBeenCalledWith(1, 10, expect.anything());
+  });
+
+  it("列表展示报告摘要，点击查看报告进入详情", async () => {
+    fetchReportListMock.mockResolvedValue({
+      items: [summary()],
+      page: 1,
+      size: 10,
+      total: 1,
+    });
+    // 点击后按 reportId 直查详情（SUCCESS 直接展示）
+    fetchReportMock.mockResolvedValue(report());
+    renderPage("/report");
+
+    expect(await screen.findByText(/Java 后端/)).toBeTruthy(); // 面试方向
+    expect(screen.getByText("76")).toBeTruthy(); // 综合得分
+    expect(screen.getByText(/已准备就绪/)).toBeTruthy(); // 准备度标签
+    expect(screen.getByText(/已生成/)).toBeTruthy(); // 报告状态
+
+    await userEvent.click(screen.getByRole("button", { name: /查看报告/ }));
+    expect(fetchReportMock).toHaveBeenCalledWith("88", expect.anything());
+    expect(await screen.findByText(/整体表现良好/)).toBeTruthy(); // 详情展示
+  });
+
+  it("列表加载失败展示错误并可重试", async () => {
+    // 首次请求失败，点击重试后重新拉取成功
+    fetchReportListMock
+      .mockRejectedValueOnce(new ReportError("报告列表接口异常", 500))
+      .mockResolvedValueOnce({ items: [summary()], page: 1, size: 10, total: 1 });
+    renderPage("/report");
+
+    expect(await screen.findByText(/报告列表接口异常/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: /重试/ }));
+    expect(await screen.findByText(/Java 后端/)).toBeTruthy();
+    expect(fetchReportListMock).toHaveBeenCalledTimes(2);
   });
 
   it("GENERATING 状态展示生成中并经 waitForReport 轮询", async () => {

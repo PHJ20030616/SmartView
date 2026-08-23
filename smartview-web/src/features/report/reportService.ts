@@ -1,7 +1,8 @@
 import type { components } from "../../api/generated/schema";
-import { getReportApi, getReportBySessionApi, retryReportApi } from "./reportApi";
+import { getReportApi, getReportBySessionApi, listReportsApi, retryReportApi } from "./reportApi";
 
 type InterviewReport = components["schemas"]["InterviewReport"];
+type InterviewReportPage = components["schemas"]["InterviewReportPage"];
 
 /** 报告轮询配置：3 秒间隔、最长 3 分钟（LLM 生成本身可能耗时较长） */
 const REPORT_POLL_INTERVAL_MS = 3000;
@@ -63,6 +64,15 @@ export async function retryReport(
   signal?: AbortSignal,
 ): Promise<InterviewReport> {
   return retryReportApi(reportId, signal);
+}
+
+/** 分页查询当前用户的报告历史摘要（报告页无参数时展示列表） */
+export async function fetchReportList(
+  page: number,
+  size: number,
+  signal?: AbortSignal,
+): Promise<InterviewReportPage> {
+  return listReportsApi(page, size, signal);
 }
 
 /**

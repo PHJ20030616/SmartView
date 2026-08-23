@@ -7,6 +7,7 @@
 export {
   fetchReport,
   fetchReportBySession,
+  fetchReportList,
   ReportError,
   retryReport,
   toReportError,
@@ -15,6 +16,7 @@ export {
 export {
   getReportApi,
   getReportBySessionApi,
+  listReportsApi,
   retryReportApi,
 } from "./reportApi";
 export {

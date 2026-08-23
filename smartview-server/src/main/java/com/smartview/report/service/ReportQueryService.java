@@ -1,6 +1,7 @@
 package com.smartview.report.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.common.api.ResponseCode;
@@ -24,6 +25,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 报告查询服务。
@@ -101,6 +104,54 @@ public class ReportQueryService {
         return toDto(refreshed, session);
     }
 
+    /**
+     * 分页查询当前用户的报告历史摘要（列表专用轻量模型）。
+     *
+     * 业务规则：
+     * - 只返回当前用户数据（userId 精确匹配），已软删除报告由 @TableLogic 自动过滤
+     * - 按创建时间倒序，最新生成的报告排在前面
+     * - 生成中/成功/失败的报告均展示：报告页进入详情后自会轮询或重试，
+     *   与历史面试页"查看报告"入口行为保持一致
+     *
+     * 性能取舍：
+     * - 会话按"会话 ID IN 本页"一次性批量查询（一次查询替代 N+1），
+     *   再在内存中按 sessionId 分组，仅用于补齐面试方向等摘要字段；
+     *   缺失会话（异常数据）时方向字段缺省，不阻断列表返回
+     *
+     * @param userId 当前登录用户 ID
+     * @param page   页码，从 1 开始（由调用方保证 >=1）
+     * @param size   每页条数（由调用方保证 1~50）
+     * @return 契约 InterviewReportPage（items 为轻量摘要，不含题目/回答/参考答案详情）
+     */
+    @Transactional(readOnly = true)
+    public com.smartview.generated.web.model.InterviewReportPage listReports(Long userId, int page, int size) {
+        Page<com.smartview.report.entity.InterviewReport> result = reportMapper.selectPage(
+                new Page<>(page, size),
+                new LambdaQueryWrapper<com.smartview.report.entity.InterviewReport>()
+                        .eq(com.smartview.report.entity.InterviewReport::getUserId, userId)
+                        .orderByDesc(com.smartview.report.entity.InterviewReport::getCreatedAt));
+
+        // 批量查询本页报告对应会话，避免逐条查询会话的 N+1 问题
+        List<Long> sessionIds = result.getRecords().stream()
+                .map(com.smartview.report.entity.InterviewReport::getSessionId)
+                .toList();
+        Map<Long, InterviewSession> sessionById = sessionIds.isEmpty() ? Map.of()
+                : sessionMapper.selectBatchIds(sessionIds).stream()
+                        .collect(Collectors.toMap(
+                                InterviewSession::getId,
+                                session -> session,
+                                // 同一会话仅一份有效报告（唯一索引兜底），冲突时保留先出现的
+                                (existing, replacement) -> existing));
+
+        List<com.smartview.generated.web.model.InterviewReportSummary> items = result.getRecords().stream()
+                .map(report -> toSummary(report, sessionById.get(report.getSessionId())))
+                .toList();
+
+        log.info("报告历史列表返回，userId={}, total={}, returned={}",
+                userId, result.getTotal(), items.size());
+        return new com.smartview.generated.web.model.InterviewReportPage(items, page, size, result.getTotal());
+    }
+
     // ==================== 私有辅助 ====================
 
     private com.smartview.report.entity.InterviewReport findReport(Long reportId, Long userId) {
@@ -166,6 +217,27 @@ public class ReportQueryService {
                 .id(entity.getId() == null ? null : entity.getId().toString())
                 .keyPoints(parseStringList(entity.getKeyPointsJson()))
                 .tradeoffs(parseTradeoffs(entity.getTradeoffsJson()));
+    }
+
+    /**
+     * 报告实体 → 契约 InterviewReportSummary（列表专用轻量模型）。
+     * 仅映射列表展示所需字段，避免加载题目/回答/参考答案等详情；
+     * 会话缺失（异常数据）时方向字段缺省为 null，不阻断列表返回。
+     */
+    private com.smartview.generated.web.model.InterviewReportSummary toSummary(
+            com.smartview.report.entity.InterviewReport entity, InterviewSession session) {
+        return new com.smartview.generated.web.model.InterviewReportSummary(
+                entity.getId().toString(),
+                entity.getSessionId().toString(),
+                entity.getUserId().toString(),
+                safeSummaryStatus(entity.getStatus()))
+                .roleDirection(safeSummaryDirection(session == null ? null : session.getRoleDirection()))
+                .overallScore(entity.getOverallScore())
+                .readinessLevel(safeSummaryReadiness(entity.getReadinessLevel()))
+                .roleFitScore(entity.getRoleFitScore())
+                .summary(entity.getSummary())
+                .generatedAt(toOffsetDateTime(entity.getGeneratedAt()))
+                .createdAt(toOffsetDateTime(entity.getCreatedAt()));
     }
 
     // ==================== JSON 反序列化 ====================
@@ -258,6 +330,40 @@ public class ReportQueryService {
             return com.smartview.generated.web.model.ReferenceAnswer.AnswerTypeEnum.fromValue(code);
         } catch (IllegalArgumentException exception) {
             log.warn("参考答案类型值未知，响应缺省，type={}", code);
+            return null;
+        }
+    }
+
+    // ==================== 摘要模型安全枚举转换 ====================
+    // 生成器为 InterviewReportSummary 生成独立的枚举类（与 InterviewReport 各自一套），
+    // 必须分别转换；未知值返回 null（响应缺省该字段而非整体 500），与既有安全转换风格一致。
+
+    private com.smartview.generated.web.model.InterviewReportSummary.StatusEnum safeSummaryStatus(String code) {
+        if (code == null) return null;
+        try {
+            return com.smartview.generated.web.model.InterviewReportSummary.StatusEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            log.warn("报告状态值未知，响应缺省，status={}", code);
+            return null;
+        }
+    }
+
+    private com.smartview.generated.web.model.InterviewReportSummary.ReadinessLevelEnum safeSummaryReadiness(String code) {
+        if (code == null) return null;
+        try {
+            return com.smartview.generated.web.model.InterviewReportSummary.ReadinessLevelEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            log.warn("准备度等级值未知，响应缺省，level={}", code);
+            return null;
+        }
+    }
+
+    private com.smartview.generated.web.model.InterviewReportSummary.RoleDirectionEnum safeSummaryDirection(String code) {
+        if (code == null) return null;
+        try {
+            return com.smartview.generated.web.model.InterviewReportSummary.RoleDirectionEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            log.warn("面试方向值未知，响应缺省，direction={}", code);
             return null;
         }
     }

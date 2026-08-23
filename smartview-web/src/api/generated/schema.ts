@@ -329,6 +329,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询报告历史列表
+         * @description 分页查询当前登录用户的复盘报告摘要，按创建时间倒序。 只返回当前用户数据；生成中/成功/失败的报告均展示（报告页自会轮询或重试）。
+         */
+        get: operations["listReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reports/{reportId}": {
         parameters: {
             query?: never;
@@ -887,6 +907,63 @@ export interface components {
             level: "GOOD" | "NORMAL" | "WEAK";
             /** @description 评估说明 */
             evaluationText?: string;
+        };
+        InterviewReportListResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["InterviewReportPage"];
+        };
+        /** @description 报告历史分页结果（items 按创建时间倒序） */
+        InterviewReportPage: {
+            /** @description 当前页报告摘要列表 */
+            items: components["schemas"]["InterviewReportSummary"][];
+            /** @description 当前页码，从 1 开始 */
+            page: number;
+            /** @description 每页条数 */
+            size: number;
+            /**
+             * Format: int64
+             * @description 符合条件的总条数
+             */
+            total: number;
+        };
+        /** @description 报告历史摘要（列表专用轻量模型，不含题目、回答与参考答案等详情） */
+        InterviewReportSummary: {
+            /** @description 报告 ID */
+            id: string;
+            /** @description 对应面试会话 ID */
+            sessionId: string;
+            /** @description 所属用户 ID */
+            userId: string;
+            /**
+             * @description 面试方向
+             * @enum {string}
+             */
+            roleDirection?: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
+            /**
+             * @description 报告状态
+             * @enum {string}
+             */
+            status: "GENERATING" | "SUCCESS" | "FAILED";
+            /** @description 综合得分（生成中/失败时可能为空） */
+            overallScore?: number;
+            /**
+             * @description 面试准备度
+             * @enum {string}
+             */
+            readinessLevel?: "NOT_READY" | "NEEDS_PRACTICE" | "READY" | "WELL_PREPARED";
+            /** @description 岗位匹配度 */
+            roleFitScore?: number;
+            /** @description 总体评价（列表内简短预览） */
+            summary?: string;
+            /**
+             * Format: date-time
+             * @description 生成完成时间，生成中/失败时为空
+             */
+            generatedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description 创建时间
+             */
+            createdAt?: string;
         };
         InterviewReportResponse: components["schemas"]["ApiResponse"] & {
             data?: components["schemas"]["InterviewReport"];
@@ -1626,6 +1703,32 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listReports: {
+        parameters: {
+            query?: {
+                /** @description 页码，从 1 开始 */
+                page?: number;
+                /** @description 每页条数，最大 50 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterviewReportListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     getReport: {

@@ -4,11 +4,13 @@ import type { components } from "../../api/generated/schema";
 import {
   getReportApi,
   getReportBySessionApi,
+  listReportsApi,
   retryReportApi,
 } from "./reportApi";
 import {
   fetchReport,
   fetchReportBySession,
+  fetchReportList,
   ReportError,
   retryReport,
   toReportError,
@@ -20,11 +22,13 @@ type InterviewReport = components["schemas"]["InterviewReport"];
 vi.mock("./reportApi", () => ({
   getReportApi: vi.fn(),
   getReportBySessionApi: vi.fn(),
+  listReportsApi: vi.fn(),
   retryReportApi: vi.fn(),
 }));
 
 const getReportMock = vi.mocked(getReportApi);
 const getReportBySessionMock = vi.mocked(getReportBySessionApi);
+const listReportsMock = vi.mocked(listReportsApi);
 const retryReportMock = vi.mocked(retryReportApi);
 
 function report(overrides: Partial<InterviewReport> = {}): InterviewReport {
@@ -59,6 +63,13 @@ describe("报告服务", () => {
     retryReportMock.mockResolvedValue(r);
     await expect(retryReport("88")).resolves.toBe(r);
     expect(retryReportMock).toHaveBeenCalledWith("88", undefined);
+  });
+
+  it("fetchReportList 透传分页参数", async () => {
+    const page = { items: [], page: 1, size: 10, total: 0 };
+    listReportsMock.mockResolvedValue(page);
+    await expect(fetchReportList(1, 10)).resolves.toBe(page);
+    expect(listReportsMock).toHaveBeenCalledWith(1, 10, undefined);
   });
 
   it("toReportError 提取后端 message 并保留状态码", () => {

@@ -2,14 +2,13 @@
  * 报告页面组件
  *
  * 展示面试复盘报告：
- * - 入参：?sessionId=（面试结束页带入，优先）、?reportId=（直查）；两者皆无 → 空态引导
+ * - 入参：?sessionId=（面试结束页带入，优先）、?reportId=（直查）；两者皆无 → 报告历史列表
  * - 状态机：loading（首拉）→ generating（轮询）｜success（展示）｜failed（可重试）｜error
  * - 报告状态：GENERATING 轮询（3s/最长 3 分钟），超时后停止自动轮询提示稍后刷新；
  *   FAILED 提供重试生成；网络/接口错误进入 error 可整页重载
  * - 安全约束：只展示契约白名单字段；不展示原始面试计划（stage_plan/current_stage 等）
  */
 import {
-  FileSearchOutlined,
   LoadingOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
@@ -42,6 +41,7 @@ import {
   READINESS_LABEL,
   ROLE_DIRECTION_LABEL,
 } from "../../features/report";
+import ReportList from "./ReportList";
 
 type InterviewReport = components["schemas"]["InterviewReport"];
 
@@ -200,25 +200,9 @@ export default function ReportPage() {
 
   // ==================== 渲染 ====================
 
-  /* 无目标参数：空态引导（保留原占位页体验） */
+  /* 无目标参数：展示历史报告列表（按 reportId 直查详情时跳过列表） */
   if (!hasTarget) {
-    return (
-      <div className="page-stack">
-        <section className="page-header">
-          <Typography.Title className="page-title" level={1}>复盘报告</Typography.Title>
-          <Typography.Paragraph className="page-subtitle">
-            完成一次模拟面试后，这里会展示准备度、风险点和学习建议。
-          </Typography.Paragraph>
-        </section>
-        <Card className="report-empty-panel" bordered={false}>
-          <FileSearchOutlined className="report-empty-icon" />
-          <Typography.Title level={3}>暂无报告</Typography.Title>
-          <Typography.Paragraph type="secondary">
-            从面试结束页进入即可查看对应复盘报告。
-          </Typography.Paragraph>
-        </Card>
-      </div>
-    );
+    return <ReportList />;
   }
 
   if (state.phase === "loading") {
