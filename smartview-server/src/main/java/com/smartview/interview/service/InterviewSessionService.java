@@ -2,6 +2,7 @@ package com.smartview.interview.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.ai.client.AiFirstQuestionResponse;
@@ -26,6 +27,7 @@ import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
+import com.smartview.report.mapper.InterviewReportMapper;
 import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
@@ -39,7 +41,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 面试会话服务。
@@ -77,6 +82,7 @@ public class InterviewSessionService {
     private final InterviewQuestionMapper questionMapper;
     private final ResumeProfileMapper resumeProfileMapper;
     private final ProfileAnalysisMapper profileAnalysisMapper;
+    private final InterviewReportMapper reportMapper;
     private final StagePlanBuilder stagePlanBuilder;
     private final AiInterviewClient aiInterviewClient;
     private final InterviewSessionDtoMapper dtoMapper;
@@ -90,6 +96,7 @@ public class InterviewSessionService {
             InterviewQuestionMapper questionMapper,
             ResumeProfileMapper resumeProfileMapper,
             ProfileAnalysisMapper profileAnalysisMapper,
+            InterviewReportMapper reportMapper,
             StagePlanBuilder stagePlanBuilder,
             AiInterviewClient aiInterviewClient,
             InterviewSessionDtoMapper dtoMapper,
@@ -101,6 +108,7 @@ public class InterviewSessionService {
         this.questionMapper = questionMapper;
         this.resumeProfileMapper = resumeProfileMapper;
         this.profileAnalysisMapper = profileAnalysisMapper;
+        this.reportMapper = reportMapper;
         this.stagePlanBuilder = stagePlanBuilder;
         this.aiInterviewClient = aiInterviewClient;
         this.dtoMapper = dtoMapper;
@@ -108,6 +116,58 @@ public class InterviewSessionService {
         this.followUpPoolService = followUpPoolService;
         this.answerHistoryAssembler = answerHistoryAssembler;
         this.reportTaskService = reportTaskService;
+    }
+
+    /**
+     * 分页查询当前用户的面试会话历史摘要（Task 7.1）。
+     *
+     * 业务规则：
+     * - 只返回当前用户数据（userId 精确匹配）
+     * - 已软删除会话由 @TableLogic 自动过滤（deleted=0）
+     * - 按创建时间倒序，最新的会话排在前面
+     * - 每条摘要附带报告关联信息（reportId/reportStatus），无报告时为 null，
+     *   供前端展示"查看报告"入口是否可用
+     *
+     * 性能取舍：
+     * - 报告按"会话 ID IN 本页"一次性批量查询（一次查询替代 N+1），
+     *   再在内存中按 sessionId 分组；interview_report 对 (session_id, deleted)
+     *   有唯一索引，一个会话最多一份有效报告
+     *
+     * @param userId 当前登录用户 ID
+     * @param page   页码，从 1 开始（由调用方保证 >=1）
+     * @param size   每页条数（由调用方保证 1~50）
+     * @return 契约 InterviewSessionPage（items 为轻量摘要，不含题目/回答详情）
+     */
+    @Transactional(readOnly = true)
+    public com.smartview.generated.web.model.InterviewSessionPage listSessions(Long userId, int page, int size) {
+        Page<InterviewSession> result = sessionMapper.selectPage(
+                new Page<>(page, size),
+                new LambdaQueryWrapper<InterviewSession>()
+                        .eq(InterviewSession::getUserId, userId)
+                        .orderByDesc(InterviewSession::getCreatedAt));
+
+        // 批量查询本页会话的报告，避免逐条查询报告的 N+1 问题
+        List<Long> sessionIds = result.getRecords().stream()
+                .map(InterviewSession::getId)
+                .toList();
+        Map<Long, com.smartview.report.entity.InterviewReport> reportBySession = sessionIds.isEmpty() ? Map.of()
+                : reportMapper.selectList(
+                                new LambdaQueryWrapper<com.smartview.report.entity.InterviewReport>()
+                                        .in(com.smartview.report.entity.InterviewReport::getSessionId, sessionIds))
+                        .stream()
+                        .collect(Collectors.toMap(
+                                com.smartview.report.entity.InterviewReport::getSessionId,
+                                report -> report,
+                                // 唯一索引 (session_id, deleted) 兜底，正常不会出现重复；冲突时保留先出现的
+                                (existing, replacement) -> existing));
+
+        List<com.smartview.generated.web.model.InterviewSessionSummary> items = result.getRecords().stream()
+                .map(session -> dtoMapper.toSummary(session, reportBySession.get(session.getId())))
+                .toList();
+
+        log.info("面试会话历史列表返回，userId={}, total={}, returned={}",
+                userId, result.getTotal(), items.size());
+        return new com.smartview.generated.web.model.InterviewSessionPage(items, page, size, result.getTotal());
     }
 
     /**

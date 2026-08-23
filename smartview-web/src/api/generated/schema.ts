@@ -79,7 +79,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * 查询简历历史列表
+         * @description 分页查询当前登录用户的简历文件历史，按上传时间倒序。 已软删除的简历（deleted=1）不返回；只返回当前用户数据。
+         */
+        get: operations["listResumes"];
         put?: never;
         /** 上传简历文件 */
         post: operations["uploadResume"];
@@ -243,7 +247,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * 查询面试会话历史列表
+         * @description 分页查询当前登录用户的面试会话摘要，按创建时间倒序。 已软删除的会话（deleted=1）不返回；只返回当前用户数据。 每条摘要携带报告状态（reportId/reportStatus），供前端决定"查看报告"入口是否可用。
+         */
+        get: operations["listInterviewSessions"];
         put?: never;
         /** 创建面试会话 */
         post: operations["createInterviewSession"];
@@ -490,6 +498,23 @@ export interface components {
         ResumeFileResponse: components["schemas"]["ApiResponse"] & {
             data?: components["schemas"]["ResumeFile"];
         };
+        ResumeFileListResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["ResumeFilePage"];
+        };
+        /** @description 简历历史分页结果（items 按上传时间倒序） */
+        ResumeFilePage: {
+            /** @description 当前页简历文件列表 */
+            items: components["schemas"]["ResumeFile"][];
+            /** @description 当前页码，从 1 开始 */
+            page: number;
+            /** @description 每页条数 */
+            size: number;
+            /**
+             * Format: int64
+             * @description 符合条件的总条数
+             */
+            total: number;
+        };
         ResumeFile: {
             /** @description 简历文件 ID */
             id: string;
@@ -704,6 +729,70 @@ export interface components {
              * @description 结束时间
              */
             endedAt?: string;
+            /**
+             * Format: date-time
+             * @description 创建时间
+             */
+            createdAt?: string;
+        };
+        InterviewSessionListResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["InterviewSessionPage"];
+        };
+        /** @description 面试会话历史分页结果（items 按创建时间倒序） */
+        InterviewSessionPage: {
+            /** @description 当前页会话摘要列表 */
+            items: components["schemas"]["InterviewSessionSummary"][];
+            /** @description 当前页码，从 1 开始 */
+            page: number;
+            /** @description 每页条数 */
+            size: number;
+            /**
+             * Format: int64
+             * @description 符合条件的总条数
+             */
+            total: number;
+        };
+        /** @description 面试会话历史摘要（列表专用轻量模型，不含题目与回答详情） */
+        InterviewSessionSummary: {
+            /** @description 面试会话 ID */
+            id: string;
+            /** @description 所属用户 ID */
+            userId: string;
+            /** @description 简历画像 ID */
+            resumeProfileId: string;
+            /**
+             * @description 面试方向
+             * @enum {string}
+             */
+            roleDirection: "JAVA_BACKEND" | "AGENT_DEVELOPMENT";
+            /**
+             * @description 会话状态
+             * @enum {string}
+             */
+            status: "CREATED" | "IN_PROGRESS" | "REPORTING" | "COMPLETED" | "CANCELLED" | "FAILED";
+            /** @description 已提出问题数量 */
+            questionCount?: number;
+            /** @description 预期最少问题数 */
+            expectedMinQuestions?: number;
+            /** @description 预期最多问题数 */
+            expectedMaxQuestions?: number;
+            /** @description 关联报告 ID，无报告（如已取消/未结束）时为空 */
+            reportId?: string | null;
+            /**
+             * @description 关联报告状态，无报告时为空
+             * @enum {string|null}
+             */
+            reportStatus?: "GENERATING" | "SUCCESS" | "FAILED" | null;
+            /**
+             * Format: date-time
+             * @description 开始时间
+             */
+            startedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description 结束时间
+             */
+            endedAt?: string | null;
             /**
              * Format: date-time
              * @description 创建时间
@@ -1081,6 +1170,32 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    listResumes: {
+        parameters: {
+            query?: {
+                /** @description 页码，从 1 开始 */
+                page?: number;
+                /** @description 每页条数，最大 50 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResumeFileListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     uploadResume: {
         parameters: {
             query?: never;
@@ -1361,6 +1476,32 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    listInterviewSessions: {
+        parameters: {
+            query?: {
+                /** @description 页码，从 1 开始 */
+                page?: number;
+                /** @description 每页条数，最大 50 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterviewSessionListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     createInterviewSession: {

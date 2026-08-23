@@ -1,8 +1,10 @@
 package com.smartview.interview.service;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.ai.client.AiFirstQuestionResponse;
 import com.smartview.ai.client.AiInterviewClient;
@@ -14,11 +16,14 @@ import com.smartview.interview.dto.AnswerHistoryAssembler;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
 import com.smartview.interview.entity.InterviewQuestion;
 import com.smartview.interview.entity.InterviewSession;
+import com.smartview.interview.enums.InterviewSessionStatus;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
 import com.smartview.interview.stage.StagePlanBuilder;
 import com.smartview.profile.entity.ProfileAnalysis;
 import com.smartview.profile.mapper.ProfileAnalysisMapper;
+import com.smartview.report.enums.ReportStatus;
+import com.smartview.report.mapper.InterviewReportMapper;
 import com.smartview.report.service.ReportTaskService;
 import com.smartview.resume.entity.ResumeProfile;
 import com.smartview.resume.mapper.ResumeProfileMapper;
@@ -67,6 +72,8 @@ class InterviewSessionServiceTest {
     @Mock
     private ProfileAnalysisMapper profileAnalysisMapper;
     @Mock
+    private InterviewReportMapper reportMapper;
+    @Mock
     private AiInterviewClient aiInterviewClient;
     @Mock
     private FollowUpPoolService followUpPoolService;
@@ -104,6 +111,7 @@ class InterviewSessionServiceTest {
                 questionMapper,
                 resumeProfileMapper,
                 profileAnalysisMapper,
+                reportMapper,
                 new StagePlanBuilder(objectMapper),
                 aiInterviewClient,
                 new InterviewSessionDtoMapper(),
@@ -585,5 +593,73 @@ class InterviewSessionServiceTest {
                 .isEqualTo(com.smartview.generated.web.model.InterviewSession.StatusEnum.REPORTING);
         // 条件更新 0 行：非本次推进成功，不得重复触发报告生成
         verify(reportTaskService, never()).startReportGeneration(any());
+    }
+
+    @Test
+    void listSessions_只查当前用户按创建时间倒序并附带报告状态() {
+        InterviewSession session = InterviewSession.builder()
+                .id(66L).userId(7L).resumeProfileId(10L)
+                .roleDirection(RoleDirection.JAVA_BACKEND.getCode())
+                .status(InterviewSessionStatus.COMPLETED.getCode())
+                .questionCount(8).expectedMinQuestions(6).expectedMaxQuestions(12)
+                .createdAt(LocalDateTime.of(2026, 8, 17, 10, 0))
+                .build();
+        com.smartview.report.entity.InterviewReport report = com.smartview.report.entity.InterviewReport.builder()
+                .id(500L).sessionId(66L).userId(7L)
+                .status(ReportStatus.SUCCESS.getCode())
+                .build();
+        Page<InterviewSession> pageResult = new Page<>(1, 10);
+        pageResult.setRecords(List.of(session));
+        pageResult.setTotal(1);
+        when(sessionMapper.selectPage(any(Page.class), any())).thenReturn(pageResult);
+        // 报告按会话 ID 批量查询，一次 IN 查询替代 N+1
+        when(reportMapper.selectList(any())).thenReturn(List.of(report));
+
+        com.smartview.generated.web.model.InterviewSessionPage result = service.listSessions(7L, 1, 10);
+
+        assertThat(result.getItems()).hasSize(1);
+        com.smartview.generated.web.model.InterviewSessionSummary summary = result.getItems().get(0);
+        assertThat(summary.getId()).isEqualTo("66");
+        assertThat(summary.getStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSessionSummary.StatusEnum.COMPLETED);
+        assertThat(summary.getRoleDirection())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSessionSummary.RoleDirectionEnum.JAVA_BACKEND);
+        // 报告关联信息随摘要返回，供前端决定"查看报告"入口是否可用
+        assertThat(summary.getReportId()).isEqualTo("500");
+        assertThat(summary.getReportStatus())
+                .isEqualTo(com.smartview.generated.web.model.InterviewSessionSummary.ReportStatusEnum.SUCCESS);
+        assertThat(result.getTotal()).isEqualTo(1);
+
+        // 查询条件必须限定 user_id（只展示当前用户数据），并按创建时间倒序
+        ArgumentCaptor<LambdaQueryWrapper<InterviewSession>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(sessionMapper).selectPage(any(Page.class), wrapperCaptor.capture());
+        String sqlSegment = wrapperCaptor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("user_id").contains("created_at");
+        // 软删除条件由 @TableLogic 在 Mapper 方法 SQL 注入时追加（deleted=0），
+        // 不在 wrapper 片段内，此处仅验证用户维度的过滤条件已生效
+    }
+
+    @Test
+    void listSessions_无报告时摘要报告字段为空_且报告批量查询使用会话ID范围() {
+        InterviewSession session = InterviewSession.builder()
+                .id(66L).userId(7L).resumeProfileId(10L)
+                .roleDirection(RoleDirection.AGENT_DEVELOPMENT.getCode())
+                .status(InterviewSessionStatus.CANCELLED.getCode())
+                .createdAt(LocalDateTime.of(2026, 8, 16, 9, 0))
+                .build();
+        Page<InterviewSession> pageResult = new Page<>(1, 10);
+        pageResult.setRecords(List.of(session));
+        pageResult.setTotal(1);
+        when(sessionMapper.selectPage(any(Page.class), any())).thenReturn(pageResult);
+        when(reportMapper.selectList(any())).thenReturn(List.of());
+
+        com.smartview.generated.web.model.InterviewSessionPage result = service.listSessions(7L, 1, 10);
+
+        assertThat(result.getItems()).hasSize(1);
+        com.smartview.generated.web.model.InterviewSessionSummary summary = result.getItems().get(0);
+        // 无报告（如已取消）：报告字段为空，前端展示"-"而非可点击入口
+        assertThat(summary.getReportId()).isNull();
+        assertThat(summary.getReportStatus()).isNull();
     }
 }

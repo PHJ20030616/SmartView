@@ -7,6 +7,8 @@ import type { components } from "../../api/generated/schema";
  */
 export type ResumeProfile = components["schemas"]["ResumeProfile"];
 export type ResumeFile = components["schemas"]["ResumeFile"];
+/** 简历历史分页结果（Task 7.1） */
+export type ResumeFilePage = components["schemas"]["ResumeFilePage"];
 export type UpdateResumeProfileRequest =
   components["schemas"]["UpdateResumeProfileRequest"];
 export type ResumeVectorizationStatus =

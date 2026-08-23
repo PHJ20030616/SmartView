@@ -127,6 +127,15 @@ body {
   margin-bottom: 28px;
 }
 
+/* 页头主行：左侧标题/说明，右侧操作入口（如"历史简历""历史面试"按钮） */
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
 .page-title {
   margin: 0 0 8px !important;
   color: #172337 !important;

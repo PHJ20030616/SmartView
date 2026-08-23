@@ -2,6 +2,7 @@ import { request } from "../../api/request";
 import type {
   ProfileAnalysisStatus,
   ResumeFile,
+  ResumeFilePage,
   ResumeProfile,
   ResumeVectorizationStatus,
   RoleDirection,
@@ -69,6 +70,23 @@ export async function getResumeFileApi(
   >(`/resumes/${resumeFileId}`, { signal });
 
   return extractData(response.data, `/resumes/${resumeFileId}`);
+}
+
+/**
+ * 查询简历历史列表（分页）
+ * GET /api/resumes?page=&size=
+ */
+export async function getResumeHistoryApi(
+  page: number,
+  size: number,
+  signal?: AbortSignal,
+): Promise<ResumeFilePage> {
+  const response = await request.get<ApiResponseWrapper<ResumeFilePage>>(
+    "/resumes",
+    { params: { page, size }, signal },
+  );
+
+  return extractData(response.data, "/resumes");
 }
 
 /**

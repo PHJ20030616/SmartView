@@ -13,6 +13,7 @@ interface ApiResponseWrapper<T> {
 type InterviewSession = components["schemas"]["InterviewSession"];
 type SubmitAnswerData = components["schemas"]["SubmitAnswerData"];
 type RoleDirection = components["schemas"]["CreateInterviewSessionRequest"]["roleDirection"];
+type InterviewSessionPage = components["schemas"]["InterviewSessionPage"];
 
 /**
  * 安全提取响应数据，data 为 null 时抛明确错误。
@@ -49,6 +50,19 @@ export async function getInterviewSessionApi(
     { signal },
   );
   return extractData(response.data, `/interview-sessions/${sessionId}`);
+}
+
+/** 查询面试会话历史列表（分页） GET /api/interview-sessions?page=&size= */
+export async function listInterviewSessionsApi(
+  page: number,
+  size: number,
+  signal?: AbortSignal,
+): Promise<InterviewSessionPage> {
+  const response = await request.get<ApiResponseWrapper<InterviewSessionPage>>(
+    "/interview-sessions",
+    { params: { page, size }, signal },
+  );
+  return extractData(response.data, "/interview-sessions");
 }
 
 /** 提交回答 POST /api/interview-sessions/{sessionId}/answers */

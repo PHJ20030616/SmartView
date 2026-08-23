@@ -3,6 +3,8 @@ package com.smartview.resume.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.SharedString;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.common.enums.ConfirmStatus;
 import com.smartview.common.enums.ParseStatus;
@@ -17,6 +19,8 @@ import com.smartview.resume.mapper.ResumeProfileMapper;
 import com.smartview.task.entity.AiTask;
 import com.smartview.task.mapper.AiTaskMapper;
 import com.smartview.task.mq.ResumeParseResultMessage;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,6 +60,17 @@ class ResumeProfileServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private ResumeProfileService service;
+
+    /**
+     * 初始化 ResumeProfile 的 MyBatis-Plus 表元数据（Lambda 缓存），
+     * 供批量画像查询测试渲染 LambdaQueryWrapper 的 SQL 片段断言列名。
+     */
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                ResumeProfile.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -498,6 +513,42 @@ class ResumeProfileServiceTest {
                 .objectKey("resumes/test.pdf")
                 .parseStatus(ParseStatus.PROCESSING.getCode())
                 .build();
+    }
+
+    @Test
+    void findLatestProfileIdsByFileIds_批量返回每个文件的最新画像且限定用户() {
+        // 文件 1 有两个版本（v1/v2），文件 2 只有一个版本，文件 3 无画像
+        ResumeProfile file1v1 = ResumeProfile.builder()
+                .id(11L).userId(7L).resumeFileId(1L).version(1).build();
+        ResumeProfile file1v2 = ResumeProfile.builder()
+                .id(12L).userId(7L).resumeFileId(1L).version(2).build();
+        ResumeProfile file2v1 = ResumeProfile.builder()
+                .id(21L).userId(7L).resumeFileId(2L).version(1).build();
+        // 模拟 Mapper 按 version 倒序返回（与查询条件 orderByDesc 一致）
+        when(resumeProfileMapper.selectList(any(LambdaQueryWrapper.class)))
+                .thenReturn(List.of(file1v2, file1v1, file2v1));
+
+        Map<Long, Long> result = service.findLatestProfileIdsByFileIds(List.of(1L, 2L, 3L), 7L);
+
+        // 每个文件取 version 最大的画像；无画像的文件不在结果中
+        assertThat(result).containsEntry(1L, 12L).containsEntry(2L, 21L);
+        assertThat(result).doesNotContainKey(3L);
+
+        // 查询必须限定 user_id（用户隔离不依赖隐式关联）
+        ArgumentCaptor<LambdaQueryWrapper<ResumeProfile>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(resumeProfileMapper).selectList(wrapperCaptor.capture());
+        String sql = wrapperCaptor.getValue().getSqlSegment();
+        assertThat(sql).contains("user_id").contains("resume_file_id");
+        // 已软删除的画像由 @TableLogic 在 Mapper SQL 注入时过滤，不在 wrapper 片段内
+    }
+
+    @Test
+    void findLatestProfileIdsByFileIds_空集合直接返回空映射不查询数据库() {
+        Map<Long, Long> result = service.findLatestProfileIdsByFileIds(List.of(), 7L);
+
+        assertThat(result).isEmpty();
+        verify(resumeProfileMapper, never()).selectList(any());
     }
 
     private String readLastSql(AbstractWrapper<?, ?, ?> wrapper) {

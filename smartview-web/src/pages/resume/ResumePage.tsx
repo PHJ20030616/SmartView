@@ -11,6 +11,7 @@
 import {
   CheckCircleFilled,
   FilePdfOutlined,
+  HistoryOutlined,
   InboxOutlined,
   InfoCircleOutlined,
 } from "@ant-design/icons";
@@ -151,12 +152,22 @@ export default function ResumePage() {
   return (
     <div className="page-stack">
       <section className="page-header">
-        <Typography.Title className="page-title" level={1}>
-          简历画像
-        </Typography.Title>
-        <Typography.Paragraph className="page-subtitle">
-          上传 PDF 简历后，系统将自动解析并生成结构化画像，解析完成后可进入确认页面校验和编辑。
-        </Typography.Paragraph>
+        <div className="page-header-row">
+          <div>
+            <Typography.Title className="page-title" level={1}>
+              简历画像
+            </Typography.Title>
+            <Typography.Paragraph className="page-subtitle">
+              上传 PDF 简历后，系统将自动解析并生成结构化画像，解析完成后可进入确认页面校验和编辑。
+            </Typography.Paragraph>
+          </div>
+          <Button
+            icon={<HistoryOutlined aria-hidden="true" />}
+            onClick={() => navigate("/resume/history")}
+          >
+            历史简历
+          </Button>
+        </div>
       </section>
 
       <div className="resume-workspace">

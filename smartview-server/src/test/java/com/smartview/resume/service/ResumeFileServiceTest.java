@@ -1,6 +1,10 @@
 package com.smartview.resume.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.smartview.common.enums.ParseStatus;
 import com.smartview.common.enums.TaskStatus;
 import com.smartview.config.properties.ResumeProperties;
@@ -12,7 +16,9 @@ import com.smartview.resume.mapper.ResumeProfileMapper;
 import com.smartview.task.entity.AiTask;
 import com.smartview.task.mapper.AiTaskMapper;
 import com.smartview.task.mq.ResumeTaskProducer;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -69,6 +75,17 @@ class ResumeFileServiceTest {
 
     private ResumeProperties resumeProperties;
     private ResumeFileService service;
+
+    /**
+     * 初始化 ResumeFile 的 MyBatis-Plus 表元数据（Lambda 缓存），
+     * 供分页查询测试渲染 LambdaQueryWrapper 的 SQL 片段断言列名。
+     */
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                ResumeFile.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -211,6 +228,33 @@ class ResumeFileServiceTest {
         verify(resumeProfileMapper, never()).selectList(any());
         verify(resumeFileMapper, never()).deleteById(anyLong());
         verify(resumeVectorizationService, never()).ensureDeleteTask(any());
+    }
+
+    @Test
+    void pageUserResumeFiles_只查当前用户并按上传时间倒序分页() {
+        // 分页结果由 Mapper 返回，服务层只负责组装查询条件并透传
+        Page<ResumeFile> pageResult = new Page<>(1, 10);
+        pageResult.setRecords(List.of(ResumeFile.builder().id(88L).userId(7L).build()));
+        pageResult.setTotal(1);
+        when(resumeFileMapper.selectPage(any(Page.class), any())).thenReturn(pageResult);
+
+        Page<ResumeFile> result = service.pageUserResumeFiles(7L, 1, 10);
+
+        assertThat(result.getRecords()).hasSize(1);
+        assertThat(result.getTotal()).isEqualTo(1);
+        // 分页参数原样透传给 Mapper（Page 的 current/size）
+        ArgumentCaptor<Page<ResumeFile>> pageCaptor = ArgumentCaptor.forClass(Page.class);
+        // 查询条件：必须限定 user_id（只展示当前用户数据），并按上传时间倒序
+        ArgumentCaptor<LambdaQueryWrapper<ResumeFile>> wrapperCaptor =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(resumeFileMapper).selectPage(pageCaptor.capture(), wrapperCaptor.capture());
+        assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(1);
+        assertThat(pageCaptor.getValue().getSize()).isEqualTo(10);
+        // TableInfo 已在 @BeforeAll 初始化，可渲染 SQL 片段断言列名
+        String sqlSegment = wrapperCaptor.getValue().getSqlSegment();
+        assertThat(sqlSegment).contains("user_id").contains("uploaded_at");
+        // 软删除条件由 @TableLogic 在 Mapper 方法 SQL 注入时追加（deleted=0），
+        // 不在 wrapper 片段内，此处仅验证用户维度的过滤条件已生效
     }
 
     @ParameterizedTest

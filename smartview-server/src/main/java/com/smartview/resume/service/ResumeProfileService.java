@@ -29,9 +29,11 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 简历画像服务
@@ -851,5 +853,34 @@ public class ResumeProfileService {
                         .orderByDesc(ResumeProfile::getVersion)
                         .last("LIMIT 1"));
         return profile != null ? profile.getId() : null;
+    }
+
+    /**
+     * 批量查询简历文件对应的最新画像 ID（Task 7.1 历史列表用）。
+     *
+     * 与 findLatestProfileIdByFileId 单条语义一致（每个文件取 version 最大的画像），
+     * 但用一次 IN 查询替代逐条查询，避免历史列表分页（最多 50 条）产生 N+1 查询。
+     * 查询显式限定 userId，用户隔离不依赖"画像必须绑定该文件"的隐式关联。
+     *
+     * @param resumeFileIds 简历文件 ID 集合（可为空）
+     * @param userId        当前登录用户 ID
+     * @return resumeFileId → 最新画像 ID 的映射；无画像的文件不包含在结果中
+     */
+    public Map<Long, Long> findLatestProfileIdsByFileIds(Collection<Long> resumeFileIds, Long userId) {
+        if (resumeFileIds == null || resumeFileIds.isEmpty()) {
+            return Map.of();
+        }
+        // 按 version 倒序查询，同一文件第一次出现即为最新版本；
+        // 已软删除的画像由 @TableLogic 自动过滤
+        List<ResumeProfile> profiles = resumeProfileMapper.selectList(
+                new LambdaQueryWrapper<ResumeProfile>()
+                        .in(ResumeProfile::getResumeFileId, resumeFileIds)
+                        .eq(ResumeProfile::getUserId, userId)
+                        .orderByDesc(ResumeProfile::getVersion));
+        // 倒序下先出现的版本号更大，toMap 合并策略保留先出现者即最新版本
+        return profiles.stream().collect(Collectors.toMap(
+                ResumeProfile::getResumeFileId,
+                ResumeProfile::getId,
+                (existing, replacement) -> existing));
     }
 }

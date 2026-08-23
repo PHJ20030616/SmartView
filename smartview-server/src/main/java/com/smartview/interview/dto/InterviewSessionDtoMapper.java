@@ -4,6 +4,7 @@ import com.smartview.generated.web.model.AnswerEvaluation;
 import com.smartview.generated.web.model.AnswerHistoryItem;
 import com.smartview.generated.web.model.InterviewQuestion;
 import com.smartview.generated.web.model.InterviewSession;
+import com.smartview.generated.web.model.InterviewSessionSummary;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -124,6 +125,79 @@ public class InterviewSessionDtoMapper {
 
     private InterviewQuestion.StatusEnum safeStatus(String code) {
         return code == null ? null : InterviewQuestion.StatusEnum.fromValue(code);
+    }
+
+    /**
+     * 组装会话历史摘要（Task 7.1 列表专用轻量模型）。
+     *
+     * 与 toResponse 的区别：摘要不含 currentQuestion 与 answers，
+     * 避免历史列表加载全部问答详情；附带报告关联信息（reportId/reportStatus），
+     * 供前端决定"查看报告"入口是否可用（报告生成中/成功/失败/无报告）。
+     *
+     * @param session 面试会话实体
+     * @param report  关联报告实体，可为 null（会话尚未生成报告）
+     * @return 契约 InterviewSessionSummary 数据模型
+     */
+    public InterviewSessionSummary toSummary(
+            com.smartview.interview.entity.InterviewSession session,
+            com.smartview.report.entity.InterviewReport report) {
+        return new InterviewSessionSummary(
+                session.getId().toString(),
+                session.getUserId().toString(),
+                session.getResumeProfileId().toString(),
+                safeSummaryDirection(session.getRoleDirection()),
+                safeSummaryStatus(session.getStatus()))
+                .questionCount(session.getQuestionCount())
+                .expectedMinQuestions(session.getExpectedMinQuestions())
+                .expectedMaxQuestions(session.getExpectedMaxQuestions())
+                .reportId(report == null ? null : report.getId().toString())
+                .reportStatus(report == null ? null : safeReportStatus(report.getStatus()))
+                .startedAt(toOffsetDateTime(session.getStartedAt()))
+                .endedAt(toOffsetDateTime(session.getEndedAt()))
+                .createdAt(toOffsetDateTime(session.getCreatedAt()));
+    }
+
+    /**
+     * 摘要模型的方向/状态安全转换：生成模型为 InterviewSession 与
+     * InterviewSessionSummary 各自生成独立的枚举类，必须分别转换；
+     * 未知值返回 null（响应缺省该字段而非整体 500）。
+     */
+    private InterviewSessionSummary.RoleDirectionEnum safeSummaryDirection(String code) {
+        if (code == null) {
+            return null;
+        }
+        try {
+            return InterviewSessionSummary.RoleDirectionEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private InterviewSessionSummary.StatusEnum safeSummaryStatus(String code) {
+        if (code == null) {
+            return null;
+        }
+        try {
+            return InterviewSessionSummary.StatusEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * 报告状态安全转换：未知值返回 null（响应缺省该字段而非整体 500）。
+     * 生成模型的 ReportStatusEnum.fromValue 对未知值本身返回 null，此处
+     * 显式 try-catch 仅为与既有安全转换风格保持一致。
+     */
+    private InterviewSessionSummary.ReportStatusEnum safeReportStatus(String code) {
+        if (code == null) {
+            return null;
+        }
+        try {
+            return InterviewSessionSummary.ReportStatusEnum.fromValue(code);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
     }
 
     /**

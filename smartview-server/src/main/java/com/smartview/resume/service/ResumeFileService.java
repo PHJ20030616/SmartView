@@ -2,6 +2,7 @@ package com.smartview.resume.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.BizType;
 import com.smartview.common.enums.ParseStatus;
@@ -224,6 +225,30 @@ public class ResumeFileService {
      */
     public List<ResumeFile> getUserResumeFiles(Long userId) {
         return resumeFileMapper.selectList(
+                new LambdaQueryWrapper<ResumeFile>()
+                        .eq(ResumeFile::getUserId, userId)
+                        .orderByDesc(ResumeFile::getUploadedAt)
+        );
+    }
+
+    /**
+     * 分页查询用户的简历文件历史（Task 7.1）。
+     *
+     * 业务规则：
+     * - 只返回当前用户数据（userId 精确匹配）
+     * - 已软删除记录由 @TableLogic 自动过滤（deleted=0）
+     * - 按上传时间倒序，最新的简历排在前面
+     * - 分页依赖 MybatisPlusConfig 注册的 PaginationInnerInterceptor，
+     *   未配置时 selectPage 不会拼接 LIMIT（全量返回、total 恒为 0）
+     *
+     * @param userId 用户 ID
+     * @param page   页码，从 1 开始（由调用方保证 >=1）
+     * @param size   每页条数（由调用方保证 1~50）
+     * @return MyBatis-Plus 分页结果（records/total）
+     */
+    public Page<ResumeFile> pageUserResumeFiles(Long userId, int page, int size) {
+        return resumeFileMapper.selectPage(
+                new Page<>(page, size),
                 new LambdaQueryWrapper<ResumeFile>()
                         .eq(ResumeFile::getUserId, userId)
                         .orderByDesc(ResumeFile::getUploadedAt)

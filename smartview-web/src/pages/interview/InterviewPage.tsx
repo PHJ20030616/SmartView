@@ -12,6 +12,7 @@ import {
   ApiOutlined,
   CheckCircleFilled,
   CodeOutlined,
+  HistoryOutlined,
   LoadingOutlined,
   ReloadOutlined,
   RobotOutlined,
@@ -78,6 +79,39 @@ const DIRECTIONS: Array<{
       "考察 LangGraph、RAG、多智能体编排、工具调用等 Agent 应用开发能力。",
   },
 ];
+
+/**
+ * 面试工作台统一页头：标题 + 可选附加内容（如方向标签）+ "历史面试"入口。
+ * 页面各状态分支共用，保证历史入口在任意状态下都可达。
+ */
+function InterviewHeader({
+  extra,
+  children,
+}: {
+  extra?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const navigate = useNavigate();
+  return (
+    <section className="page-header">
+      <div className="page-header-row">
+        <Space align="center" size={14} wrap>
+          <Typography.Title className="page-title" level={1}>
+            模拟面试
+          </Typography.Title>
+          {extra}
+        </Space>
+        <Button
+          icon={<HistoryOutlined aria-hidden="true" />}
+          onClick={() => navigate("/interview/history")}
+        >
+          历史面试
+        </Button>
+      </div>
+      {children}
+    </section>
+  );
+}
 
 export default function InterviewPage() {
   const navigate = useNavigate();
@@ -269,11 +303,7 @@ export default function InterviewPage() {
   if (state.phase === "missing-profile") {
     return (
       <div className="page-stack">
-        <section className="page-header">
-          <Typography.Title className="page-title" level={1}>
-            模拟面试
-          </Typography.Title>
-        </section>
+        <InterviewHeader />
         <Card bordered={false}>
           <div className="state-panel">
             <div className="state-panel-content">
@@ -298,15 +328,12 @@ export default function InterviewPage() {
   if (state.phase === "selecting") {
     return (
       <div className="page-stack">
-        <section className="page-header">
-          <Typography.Title className="page-title" level={1}>
-            模拟面试
-          </Typography.Title>
+        <InterviewHeader>
           <Typography.Paragraph className="page-subtitle">
             简历检索索引已准备完成，请选择面试方向。系统将为该方向生成画像分析，
             用于后续出题与追问。
           </Typography.Paragraph>
-        </section>
+        </InterviewHeader>
 
         <div className="direction-grid">
           {DIRECTIONS.map((item) => (
@@ -357,11 +384,7 @@ export default function InterviewPage() {
       state.direction;
     return (
       <div className="page-stack">
-        <section className="page-header">
-          <Typography.Title className="page-title" level={1}>
-            模拟面试
-          </Typography.Title>
-        </section>
+        <InterviewHeader />
         <Card bordered={false}>
           <div className="state-panel">
             <div className="state-panel-content">
@@ -389,14 +412,7 @@ export default function InterviewPage() {
       state.direction;
     return (
       <div className="page-stack">
-        <section className="page-header">
-          <Space align="center" size={14}>
-            <Typography.Title className="page-title" level={1}>
-              模拟面试
-            </Typography.Title>
-            <Tag color="success">{directionLabel}</Tag>
-          </Space>
-        </section>
+        <InterviewHeader extra={<Tag color="success">{directionLabel}</Tag>} />
         <Card bordered={false}>
           <div className="state-panel">
             <div className="state-panel-content">
@@ -437,14 +453,7 @@ export default function InterviewPage() {
     state.direction;
   return (
     <div className="page-stack">
-      <section className="page-header">
-        <Space align="center" size={14}>
-          <Typography.Title className="page-title" level={1}>
-            模拟面试
-          </Typography.Title>
-          <Tag color="error">{failedDirectionLabel}</Tag>
-        </Space>
-      </section>
+      <InterviewHeader extra={<Tag color="error">{failedDirectionLabel}</Tag>} />
       <Card bordered={false}>
         <div className="state-panel">
           <div className="state-panel-content">
