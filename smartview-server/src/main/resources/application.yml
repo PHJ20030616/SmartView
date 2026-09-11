@@ -104,8 +104,11 @@ smartview:
     secret-key: ${MINIO_ROOT_PASSWORD:12345678}
     bucket: ${MINIO_BUCKET:smartview}
   jwt:
-    # 签名密钥禁止提供可预测回退值；未配置或强度不足时应用必须在启动阶段失败。
-    secret: ${JWT_SECRET:1234567890123456789012345678901234567890}
+    # 签名密钥禁止提供可预测回退值：未配置时占位符解析为空串，
+    # 由 JwtProperties 的 @NotBlank 在启动阶段直接失败，
+    # 避免部署环境漏配时用公开密钥签发可被伪造的 Token。
+    # 本地开发的真实密钥来自 smartview-infra/.env（见文件头 spring.config.import 通道）。
+    secret: ${JWT_SECRET:}
     issuer: ${JWT_ISSUER:smartview}
     access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:7200}
   resume:

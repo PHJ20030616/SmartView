@@ -473,3 +473,54 @@ mvn org.apache.maven.plugins:maven-clean-plugin:3.3.2:clean test
 ```
 
 结果：OpenAPI Generator 重新生成 4 个 DTO；40/40 测试通过，失败 0，错误 0，跳过 0。
+
+---
+
+## 附录：P1 安全问题的回归记录（2026-09-11）
+
+**现象**
+
+本文件 §2.1 修复完成后，`application.yml` 中再次出现可预测回退密钥
+（40 位纯数字，首尾为 `1234`…`7890`，原值见提交 `9463938`），与紧邻注释声明的"禁止提供可预测回退值"相矛盾。
+
+> 本文刻意不复写完整的 40 位字面量：让 `git grep` 该字面量保持零命中，
+> 作为"仓库内不再存在可预测密钥"的可执行检查（见 `develop_plan/smartview-task-plan_1.1.md` Task 11.1 Step 9）。
+
+**根因**
+
+1. 提交 `9463938`（chore: 前后端联调）为了本地联调方便，把 `${JWT_SECRET:}` 改回固定值；
+2. 修复时补的 `JwtPropertiesValidationTest` 使用 `ApplicationContextRunner`，只装配配置绑定类、
+   不加载 `application.yml`，因此只能证明"绑定类会拒绝空密钥"，
+   无法发现"随包发布的配置文件又给出了密钥"。
+
+**处置**
+
+1. 恢复为 `${JWT_SECRET:}`，并在 `smartview-infra/.env` 写入强随机密钥供本地开发使用；
+2. 新增用例 `applicationYmlMustNotProvideFallbackJwtSecret`，直接读取 `application.yml` 的
+   原始属性值（绕过占位符解析），把"配置文件不得携带回退密钥"固化为可执行断言。
+3. 前置补强：`application.yml` 此前**从未读取** `smartview-infra/.env`（Java 侧无 dotenv 通道），
+   所以恢复空回退值会直接导致本地启动失败。已通过 `spring.config.import` 打通该通道，
+   并由 `SharedInfraEnvImportTest` 守卫，详见 `develop_plan/smartview-task-plan_1.1.md` Task 11.0。
+
+**验证证据**
+
+- 金丝雀配置位（`SERVER_PORT`）：通道打通前日志为 `Tomcat started on port 8080`（.env 被无视），
+  打通后为 `Tomcat started on port 18080`，移除探针后恢复 8080；
+- 反例（注释掉 `.env` 的 `JWT_SECRET`）启动失败并给出明确错误：
+
+  ```text
+  APPLICATION FAILED TO START
+  Binding to target com.smartview.config.properties.JwtProperties failed:
+      Property: smartview.jwt.secret
+      Value: ""
+      Origin: class path resource [application.yml] - 111:13
+      Reason: JWT 签名密钥不能为空
+  ```
+
+- 正例（配置强随机密钥）启动成功，健康检查返回 `HTTP 200 {"code":"SUCCESS","status":"UP"}`。
+
+**教训**
+
+安全修复的测试必须覆盖**问题所在的层**。原问题是配置文件内容问题，
+只在 Java 绑定层写测试，防线就建在了问题之外。
+
