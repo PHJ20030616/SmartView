@@ -4,10 +4,10 @@
 # 运行前提：需要本地基础设施就绪——
 # - MySQL：测试库 smartview_test（Flyway 自动建表，库需存在）
 # - MinIO：本地对象存储（端口 9000）
-# - 凭据来自 smartview-infra/.env（被 .gitignore 忽略），运行前先加载：
-#     set -a; source smartview-infra/.env; set +a; mvn test
-#   MySQL 默认值 root/123456 与 .env 一致，可直连；MinIO 密码与 .env 绑定，
-#   未加载 .env 时 MinIO 认证会失败。
+# - 连接凭据由 application.yml 的 spring.config.import 从 smartview-infra/.env 自动载入，
+#   无需再手动 source 该文件（.env 被 .gitignore 忽略，缺失时跳过导入而不报错）。
+#   下面这些 ${VAR:默认值} 与 .env 取值一致，仅作 .env 缺失时的兜底；
+#   MinIO 凭据来自 application.yml 的 smartview.minio.secret-key，走同一条通道。
 # =====================================================
 spring:
   datasource:

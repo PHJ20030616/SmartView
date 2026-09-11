@@ -7,6 +7,29 @@ server:
 
 spring:
 
+  # 共享配置通道：把 smartview-infra/.env 注入 Spring Boot Environment。
+  #
+  # 为什么必须显式声明：Spring Boot 不认 .env 格式——那是 Docker Compose / shell 的约定，
+  # 不是 Java 生态的。Python 侧靠 app/core/config.py 的 load_dotenv 自行加载，
+  # Java 侧此前没有任何对应机制，导致下面所有 ${VAR:default} 全部走回退默认值；
+  # 而回退值恰好与 .env 逐字节相同，所以这个缺陷长期不可见。
+  #
+  # [.properties] 是必需的扩展名提示：.env 不在 Spring 的已知扩展名（properties/yml/yaml）
+  # 之内，没有提示会直接报 "Unable to load config data"。本 .env 的写法保证可被 properties
+  # 语法正确解析：纯 KEY=value、注释独占一行、无引号、无 export 前缀、无 $ 插值、无反斜杠转义。
+  # 若将来往 .env 里写带引号或空格的取值，会与本解析器产生差异（Compose 支持、properties 不完全等价）。
+  #
+  # optional: 前缀是有意为之：文件缺失时跳过而不是报错。新克隆的仓库没有 .env（已被 .gitignore 忽略），
+  # 此时应当继续走到"JWT_SECRET 为空 → 启动失败并给出明确的配置错误"，
+  # 而不是含糊的"配置文件找不到"。
+  #
+  # 两个路径分别覆盖两种真实工作目录：mvn spring-boot:run 与 IDEA 默认都在 smartview-server/ 下
+  # 运行（用 ../），从仓库根执行时命中后者。Docker / CI 可用 SPRING_CONFIG_IMPORT 环境变量整体覆盖。
+  config:
+    import:
+      - optional:file:../smartview-infra/.env[.properties]
+      - optional:file:smartview-infra/.env[.properties]
+
   servlet:
     multipart:
       enabled: true
@@ -41,7 +64,7 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:smartview_redis_password}
+      password: ${REDIS_PASSWORD:123456}
       database: ${REDIS_DATABASE:0}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
@@ -78,7 +101,7 @@ smartview:
   minio:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
     access-key: ${MINIO_ROOT_USER:smartview}
-    secret-key: ${MINIO_ROOT_PASSWORD:smartview_minio_password}
+    secret-key: ${MINIO_ROOT_PASSWORD:12345678}
     bucket: ${MINIO_BUCKET:smartview}
   jwt:
     # 签名密钥禁止提供可预测回退值；未配置或强度不足时应用必须在启动阶段失败。
@@ -99,6 +122,6 @@ smartview:
     # FastAPI AI 服务同步调用配置（首题生成等需要同步返回的轻量接口）
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
     # 跨服务鉴权密钥，与 smartview-ai 的 AI_SERVICE_API_KEY 保持一致
-    api-key: ${AI_SERVICE_API_KEY:}
+    api-key: ${AI_SERVICE_API_KEY:smart-view}
     connect-timeout-ms: ${AI_SERVICE_CONNECT_TIMEOUT_MS:3000}
     read-timeout-ms: ${AI_SERVICE_READ_TIMEOUT_MS:60000}
