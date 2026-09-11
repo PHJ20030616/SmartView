@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.knowledge_metadata import (
     parse_frontmatter,
     scan_knowledge_root,
@@ -224,7 +226,18 @@ def test_parse_frontmatter_handles_bom_and_crlf() -> None:
 
 
 def test_scan_real_knowledge_root_has_valid_metadata() -> None:
-    scan_result = scan_knowledge_root(PROJECT_ROOT / "knowledge")
+    """真实语料的元信息必须合法——但只在语料存在时校验。
+
+    knowledge/ 被 .gitignore 排除（第三方题库材料不进版本库，见 .gitignore 的 knowledge/），
+    因此 CI 的全新检出里没有这个目录。若无条件断言"必须有材料"，本用例在 CI 必然失败；
+    而它真正要守的是"语料在时元信息得是对的"，所以缺语料时应当跳过而不是判失败。
+    """
+    knowledge_root = PROJECT_ROOT / "knowledge"
+    # rglob 对不存在的目录返回空迭代器，因此这一行同时覆盖"目录缺失"与"目录为空"两种情况
+    if not any(knowledge_root.rglob("*.md")):
+        pytest.skip("knowledge/ 语料未纳入版本管理，本机没有可校验的真实材料")
+
+    scan_result = scan_knowledge_root(knowledge_root)
     # 真实材料文件名包含中文且内容可能变动，这里只断言结构而非具体文件名，
     # 避免材料更新导致测试与入库脚本脱节。
     assert scan_result.documents, "knowledge 根目录下应存在可识别的材料"
