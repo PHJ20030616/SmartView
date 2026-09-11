@@ -44,7 +44,23 @@ Spring Boot **不认** `.env` 格式——那是 Docker Compose / shell 的约�
 服务照常启动、功能照常可用，只是在改了 `.env` 之后"什么都没变"。这类问题极难排查，
 因此有 `SharedInfraEnvImportTest` 专门守住这条声明。
 
-Docker / CI 场景可用 `SPRING_CONFIG_IMPORT` 环境变量整体覆盖导入路径。
+Docker / CI 场景可用 `SPRING_CONFIG_IMPORT` 环境变量整体覆盖导入路径。注意本项目的 CI
+走的不是这条通道：`.github/workflows/ci.yml` 的后端 job 使用 `application-test.yml`
+并在 workflow 中注入所需环境变量。
+
+### 打包运行（`java -jar`）
+
+上面两个导入路径是**按进程当前工作目录**解析的，因此 `java -jar` 不受它们保护：
+只有在仓库根或 `smartview-server/` 目录下执行才会命中，在其它目录启动请显式指定：
+
+```bash
+java -jar smartview-server/target/smartview-server-0.1.0-SNAPSHOT.jar \
+  --spring.config.import=optional:file:/绝对路径/smartview-infra/.env[.properties]
+```
+
+漏配的后果是静默的：`.env` 没被读到，所有 `${VAR:默认值}` 走回退值，服务照常启动，
+只是你改的配置不生效。因此打包部署后请确认启动日志里没有 `Skipped config file` 提示，
+或用上面「常见问题」里的端口探针法确认通道已通。
 
 ### JWT 密钥
 

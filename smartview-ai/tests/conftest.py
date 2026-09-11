@@ -27,3 +27,14 @@ def isolate_process_environ():
     finally:
         os.environ.clear()
         os.environ.update(snapshot)
+        # 还原环境变量之后，还要丢掉 Settings 的 lru_cache 缓存。
+        # 否则用例 A 在"改了环境变量"的状态下调用 get_settings()，缓存的实例会活到用例 B，
+        # 使 B 读到 A 的配置——这同样是顺序依赖，只是更隐蔽（当前靠各处手工调用
+        # cache_clear() 兜底，属分散约定而非机制保障）。
+        #
+        # 注意这里的导入必须放在函数内：app/core/config.py 在模块级就会执行
+        # _load_shared_infra_env()，把它提到文件顶部会让"真实 .env 的值"在收集阶段
+        # 就进入 os.environ，之后每个用例的快照都带着它，反而让用例重新依赖本机环境。
+        from app.core.config import get_settings
+
+        get_settings.cache_clear()

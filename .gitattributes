@@ -3,3 +3,10 @@
 # 在 bash 中会报 "bad interpreter: /bin/bash^M" 而无法执行；
 # CI（ubuntu-latest）与本地 Git Bash / WSL 都要求 LF。
 *.sh text eol=lf
+
+# 契约生成物同样固定为 LF。
+# 原因：CI 的契约漂移门禁靠"重新生成后 git diff --exit-code 是否为空"判断，
+# 而生成器在 Windows 与 Linux 上写出的行尾不同（Windows 下为 CRLF）。
+# 若检出侧也是 CRLF，本地重新生成就会产生"内容其实一致、只有行尾不同"的
+# 假漂移告警，让人误以为契约没同步。固定为 LF 后，两侧比较结果才是确定的。
+smartview-web/src/api/generated/*.ts text eol=lf

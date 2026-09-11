@@ -27,8 +27,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * YamlPropertySourceLoader 展平成索引键 {@code spring.config.import[0]}、
  * {@code spring.config.import[1]}，因此 {@code getProperty("spring.config.import")}
  * 恒为 null。这里按前缀收集所有相关属性，既覆盖列表写法，也兼容将来改成
- * 逗号分隔字符串的写法——两者 Spring Boot 都能识别，而本测试只关心
- * "是否声明了指向共享 .env 的导入"。
+ * 逗号分隔字符串的写法——两者 Spring Boot 都能识别。
+ *
+ * 为什么断言必须精确比对整条路径、而不是"前缀 + 后缀"形状匹配：
+ * 单测自身也要能被证伪。用形状匹配时，把路径写成 {@code /nonsense/dir/smartview-infra/.env[.properties]}
+ * 依然会通过——它同样以 {@code optional:file:} 开头、以 {@code smartview-infra/.env[.properties]} 结尾，
+ * 但真实启动时根本解析不到文件，通道彻底失效、所有回退默认值静默生效。
+ * 而"路径写错"恰恰是这段配置最可能出错的形态（例如把 {@code ../} 误写成 {@code ../../}），
+ * 因此这里只接受下面两个经文档化的、能在真实工作目录下命中的相对路径。
  *
  * @author SmartView Team
  * @since 2026-09-11
@@ -38,8 +44,19 @@ class SharedInfraEnvImportTest {
     /** application.yml 中配置导入项的属性名前缀。 */
     private static final String IMPORT_PROPERTY_PREFIX = "spring.config.import";
 
-    /** 导入声明的目标：共享基础设施配置，相对工作目录解析。 */
-    private static final String SHARED_ENV_SUFFIX = "smartview-infra/.env[.properties]";
+    /**
+     * 允许的导入声明完整取值。
+     *
+     * <p>两条分别对应两种被文档化的启动工作目录（见 docs/local-development.md）：
+     * 在 {@code smartview-server/} 目录下启动（{@code mvn spring-boot:run} 的默认工作目录）
+     * 命中前者的 {@code ../}；在仓库根启动命中后者。两条都带 {@code [.properties]}
+     * 扩展名提示——{@code .env} 不在 Spring 已知扩展名内，缺提示会直接报
+     * {@code Unable to load config data}。
+     */
+    private static final List<String> ALLOWED_IMPORT_LOCATIONS = List.of(
+            "optional:file:../smartview-infra/.env[.properties]",
+            "optional:file:smartview-infra/.env[.properties]"
+    );
 
     @Test
     void applicationYmlMustImportSharedInfraEnv() throws IOException {
@@ -67,9 +84,8 @@ class SharedInfraEnvImportTest {
                 .isNotEmpty();
 
         assertThat(importLocations)
-                .as("导入声明必须指向 smartview-infra/.env 并带 [.properties] 扩展名提示"
-                        + "（.env 不在 Spring 已知扩展名内，缺提示会报 Unable to load config data）")
-                .anyMatch(location -> location.startsWith("optional:file:")
-                        && location.endsWith(SHARED_ENV_SUFFIX));
+                .as("导入声明必须精确等于下列受支持路径之一（前缀或路径写法偏差都会让 .env 失效，"
+                        + "而 ${VAR:default} 会静默回落）：%s", ALLOWED_IMPORT_LOCATIONS)
+                .anyMatch(ALLOWED_IMPORT_LOCATIONS::contains);
     }
 }

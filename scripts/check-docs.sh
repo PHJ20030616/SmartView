@@ -9,41 +9,44 @@
 # 反向说，如果这里报了错但你确认文档是正确的，那说明代码没有跟上文档。
 set -euo pipefail
 
-# 良构路径：脚本可能从仓库根或任意目录调用，用脚本位置反推仓库根。
+# 路径处理：脚本可能从仓库根或任意目录被调用（CI 与本地皆有可能），
+# 因此按脚本自身位置反推仓库根，避免相对路径依赖调用者的当前目录。
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# 形如 "<文件名>:<禁止出现的正则>"，正则使用 grep -E 语法。
-FORBIDDEN=(
-  "README.md:AiServiceClient|ObjectStorageService|VectorStoreService"
-  "README.md:\./mvnw"
-  "AGENTS.md:AiServiceClient|smartview-backend"
-  "AGENTS.md:\./mvnw"
-)
+# 禁止出现在当前文档中的名字：均为历史上真实存在过、但代码里已不存在的类、模块或命令。
+# 用单个正则覆盖全部文档，而不是给每个文件配一条规则——同一份"已废弃名字"清单
+# 若分散在多处，加新名字时容易漏掉某个文件。
+FORBIDDEN_PATTERN='AiServiceClient|ObjectStorageService|VectorStoreService|smartview-backend|\./mvnw'
 
-# 待检查文件清单。注意 AGENTS.md 被 .gitignore 排除（决策见提交 2fe97db
-# "从版本控制中移除 AGENTS.md 和 develop_plan/ 目录"），因此它只存在于本地工作区，
-# CI 检出中不会有这个文件。
+# 扫描范围＝当前生效的文档。
+#
+# 为什么 docs/ 只取第一层：docs/plans、docs/errors、docs/superpowers 是历史归档，
+# 记录的是当时的结论与决策过程（例如 task0.1 的计划里确实写着 AiServiceClient），
+# 出现旧名字属于史实，改成新名字反而破坏了记录的真实性。因此它们有意排除在外。
+#
+# 待检查文件可能缺失：AGENTS.md 被 .gitignore 排除（决策见提交 2fe97db
+# "从版本控制中移除 AGENTS.md 和 develop_plan/ 目录"），CI 检出中不会有这个文件。
 # 关键点：缺失时必须显式声明"未检查"，不能让针对它的规则悄悄失效——
 # 静默跳过会让人误以为 AGENTS.md 也通过了门禁，那比不检查更危险。
-scan_files=()
+current_docs=()
 for candidate in README.md AGENTS.md; do
   if [ -f "$candidate" ]; then
-    scan_files+=("$candidate")
+    current_docs+=("$candidate")
   else
     echo "::notice::$candidate 不在当前工作区（未纳入版本管理），本轮跳过对它的检查"
   fi
 done
+for candidate in docs/*.md; do
+  [ -f "$candidate" ] && current_docs+=("$candidate")
+done
 
 failed=0
-for rule in "${FORBIDDEN[@]}"; do
-  file="${rule%%:*}"
-  pattern="${rule#*:}"
-  [ -f "$file" ] || continue
+for doc in "${current_docs[@]}"; do
   # grep 无匹配时退出码为 1，此处用 || true 兜住，避免被 set -e 提前中断。
-  matches="$(grep -nE "$pattern" "$file" || true)"
+  matches="$(grep -nE "$FORBIDDEN_PATTERN" "$doc" || true)"
   if [ -n "$matches" ]; then
-    echo "::error file=$file::检测到与实现不符的文档描述（正则：$pattern）"
+    echo "::error file=$doc::检测到与实现不符的文档描述（正则：$FORBIDDEN_PATTERN）"
     echo "$matches"
     failed=1
   fi
@@ -55,7 +58,7 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 文档索引可达性：README/AGENTS 里提到的 docs/*.md 必须真实存在。
+# 文档索引可达性：文档里提到的 docs/*.md 必须真实存在。
 #
 # 背景：README 曾索引 docs/local-development.md 而该文件不存在。这条漂移不只是"链接失效"，
 # 它让"环境变量该怎么配"无处可查，间接掩盖了 Spring Boot 从未读取 .env 的缺陷（见 Task 11.0）。
@@ -65,15 +68,27 @@ fi
 # 不是漂移。豁免依据写在被引用行自身（同一行含"规划中"），而不是脚本里的白名单：
 # 这样文档自己声明了状态，也不会出现"白名单里躺着一个早已创建的文档"这种反向漂移。
 # 新建这类文档后，记得把行内"（规划中）"标记去掉，该条目随即纳入强校验。
-# ---------------------------------------------------------------------------
+#
+# 路径提取前先把"标点分隔符"归一化成空格。两点都是实测踩出来的：
+# 1) 不能把多字节标点（。，、等）直接写进 [^...] 排除字符集：GNU grep 在这种写法下
+#    会把中文路径一并排除，docs/不存在的文档.md 完全匹配不到——门禁对中文路径静默失效；
+# 2) 不归一化时，"docs/a.md、docs/b.md"会被 [^[:space:]]* 贪婪地并成一个假路径，
+#    反过来产生误报。
+# 因此这里用 sed 按字面量逐个替换，而不是把它们塞进字符集。
+normalize_separators() {
+  sed -e 's/、/ /g' -e 's/，/ /g' -e 's/。/ /g' -e 's/；/ /g' -e 's/：/ /g' \
+      -e 's/（/ /g' -e 's/）/ /g' -e 's/《/ /g' -e 's/》/ /g' \
+      -e 's/【/ /g' -e 's/】/ /g' -e 's/[](),;:>]/ /g'
+}
+DOC_REF_REGEX='docs/[^[:space:]]*\.md'
 PLANNED_MARKER="规划中"
-for doc_file in "${scan_files[@]}"; do
+for doc_file in "${current_docs[@]}"; do
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     line_no="${entry%%:*}"
     line_text="${entry#*:}"
     # 一行里可能引用多个文档，逐个取出校验。
-    while read -r doc; do
+    while IFS= read -r doc; do
       [ -n "$doc" ] || continue
       if [ -f "$doc" ]; then
         continue
@@ -85,8 +100,8 @@ for doc_file in "${scan_files[@]}"; do
           failed=1
           ;;
       esac
-    done < <(printf '%s\n' "$line_text" | grep -ohE 'docs/[A-Za-z0-9_./-]+\.md' | sort -u || true)
-  done < <(grep -nE 'docs/[A-Za-z0-9_./-]+\.md' "$doc_file" || true)
+    done < <(printf '%s\n' "$line_text" | normalize_separators | grep -ohE "$DOC_REF_REGEX" | sort -u || true)
+  done < <(grep -nE "$DOC_REF_REGEX" "$doc_file" || true)
 done
 
 if [ "$failed" -ne 0 ]; then

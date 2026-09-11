@@ -24,7 +24,12 @@ spring:
   # 而不是含糊的"配置文件找不到"。
   #
   # 两个路径分别覆盖两种真实工作目录：mvn spring-boot:run 与 IDEA 默认都在 smartview-server/ 下
-  # 运行（用 ../），从仓库根执行时命中后者。Docker / CI 可用 SPRING_CONFIG_IMPORT 环境变量整体覆盖。
+  # 运行（用 ../），从仓库根执行时命中后者。
+  # 注意路径按进程当前工作目录解析，因此 `java -jar` 这类打包运行方式不受这两个相对路径保护：
+  # 在仓库根或 smartview-server/ 下执行才会命中，其它目录请用 SPRING_CONFIG_IMPORT 显式指定
+  # （见 docs/local-development.md 的「打包运行」）。
+  # 另外，本项目的 CI（.github/workflows/ci.yml 的 backend job）走的不是这条通道：
+  # 它使用 application-test.yml 并在 workflow 里注入所需环境变量，与本地开发互不影响。
   config:
     import:
       - optional:file:../smartview-infra/.env[.properties]

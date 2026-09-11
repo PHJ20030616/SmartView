@@ -485,6 +485,12 @@ mvn org.apache.maven.plugins:maven-clean-plugin:3.3.2:clean test
 
 > 本文刻意不复写完整的 40 位字面量：让 `git grep` 该字面量保持零命中，
 > 作为"仓库内不再存在可预测密钥"的可执行检查（见 `develop_plan/smartview-task-plan_1.1.md` Task 11.1 Step 9）。
+>
+> 该结论的适用范围仅限**受版本控制的文件**：`git grep` 只搜索已跟踪文件，对 gitignore
+> 的文件静默返回"无匹配"。实测 `develop_plan/smartview-task-plan_1.1.md`（被 `.gitignore`
+> 排除的计划文档）中该历史字面量仍出现 4 次——它是被修复旧值的记录，不是可部署配置，
+> 因此不构成安全风险，但也说明"零命中"不能被当作全盘结论。要扫全工作区请改用
+> `git grep --no-index` 或 ripgrep 之类的文件系统搜索。
 
 **根因**
 
