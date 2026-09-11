@@ -4,6 +4,7 @@ from logging.handlers import RotatingFileHandler
 
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
 from app.core.logging import TraceIdFilter, configure_logging
 from app.core.trace import reset_trace_id, set_trace_id
 from app.main import create_app
@@ -113,8 +114,16 @@ def test_http_request_logs_include_trace_id() -> None:
     )
 
 
-def test_http_error_request_still_logs_completion() -> None:
-    """业务异常（如鉴权失败）也要输出请求完成日志，便于排查调用失败。"""
+def test_http_error_request_still_logs_completion(monkeypatch) -> None:
+    """业务异常（如鉴权失败）也要输出请求完成日志，便于排查调用失败。
+
+    鉴权是 fail-closed：未配置 AI_SERVICE_API_KEY 时返回的是"未配置密钥"的 500，
+    而不是 401。因此本用例必须显式配置密钥，否则它的结果取决于运行机器上
+    是否存在 smartview-infra/.env（该文件被 gitignore，CI 上不存在）——
+    本地恰好能过、CI 必挂，属于典型的假绿灯。
+    """
+    monkeypatch.setenv("AI_SERVICE_API_KEY", "expected-service-key")
+    get_settings.cache_clear()
     app = create_app()
     collector, logger = _collect_access_logs()
     try:
@@ -129,6 +138,7 @@ def test_http_error_request_still_logs_completion() -> None:
         )
     finally:
         logger.removeHandler(collector)
+        get_settings.cache_clear()
 
     assert response.status_code == 401
     messages = _format_with_trace_id(collector.records)

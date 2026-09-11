@@ -225,14 +225,23 @@ def test_narrative_second_validation_failure_raises_app_error(monkeypatch) -> No
 # ==================== ReportGenerator ====================
 
 def test_generate_missing_report_raises_app_error(monkeypatch) -> None:
+    """会话存在但报告尚未创建时，应抛出 REPORT_NOT_FOUND。
+
+    必须同时打桩 _load_session：generate() 会先加载会话，若让它走真实数据库，
+    本用例在本地是"会话不存在也抛 AppError"的假绿灯（看起来通过，其实没走到
+    报告缺失这条分支），在无 MySQL 的 CI 上则直接变成连接错误。
+    """
     gen = ReportGenerator()
+    monkeypatch.setattr(gen, "_load_session",
+                        lambda sid: {"resume_profile_id": 12, "profile_analysis_id": 3})
 
     def fake_load_report_id(session_id):
         raise AppError("面试报告尚未创建", code="REPORT_NOT_FOUND")
 
     monkeypatch.setattr(gen, "_load_report_id", fake_load_report_id)
-    with pytest.raises(AppError):
+    with pytest.raises(AppError) as excinfo:
         asyncio.run(gen.generate("88"))
+    assert excinfo.value.code == "REPORT_NOT_FOUND"
 
 
 def test_generate_no_answered_question_raises_app_error(monkeypatch) -> None:

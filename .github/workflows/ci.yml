@@ -25,11 +25,17 @@ jobs:
           cache: npm
           cache-dependency-path: smartview-web/package-lock.json
 
-      - name: 校验 OpenAPI 契约语法
+      - name: 安装前端依赖
         working-directory: smartview-web
-        run: |
-          npm ci
-          npx --yes @openapitools/openapi-generator-cli@7.23.0 validate -i ../contracts/web-api/openapi.yaml
+        run: npm ci
+
+      # 契约语法校验：@openapitools/openapi-generator-cli 这个 npm 包的版本号（2.x）
+      # 与它运行时下载的生成器 JAR 版本号（7.x）是两套独立编号，JAR 版本由仓库根的
+      # openapitools.json 固定。首轮 CI 曾把 JAR 版本写成 npm 版本（@7.23.0）而报 404，
+      # 因此这里不写版本，交给 openapitools.json 决定。
+      # 必须在仓库根目录执行，否则读不到 openapitools.json。
+      - name: 校验 OpenAPI 契约语法
+        run: npx --yes @openapitools/openapi-generator-cli validate -i contracts/web-api/openapi.yaml
 
       - name: 重新生成前端契约类型
         working-directory: smartview-web
