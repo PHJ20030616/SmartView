@@ -166,9 +166,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[test]"
 
+      # --tb=line 让每个失败用例压缩成一行，便于作为注解上报；
+      # 注意必须显式 set -o pipefail：GitHub 默认 shell 是 bash -e（不含 pipefail），
+      # 否则管道会以 tee 的退出码为准，pytest 失败会被吞掉、步骤变成"成功"。
       - name: 运行 pytest
         working-directory: smartview-ai
-        run: python -m pytest
+        run: |
+          set -o pipefail
+          python -m pytest --tb=line -q 2>&1 | tee pytest-output.txt
+
+      # 把失败用例与断言摘要转成注解。
+      # 原因：GitHub 的 job 日志下载需要登录，而注解（::error::）在未登录时也可读；
+      # 没有这一步时，CI 失败对外只剩一句 "exit code 1"，无法自助定位问题。
+      - name: 上报 pytest 失败摘要
+        if: failure()
+        working-directory: smartview-ai
+        run: |
+          grep -nE '^(FAILED|ERROR)|\.py:[0-9]+: ' pytest-output.txt | head -30 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          exit 1
 
   # 文档门禁单独成 job：文档漂移不会让任何单元测试变红，只能靠独立检查兜住。
   # 脚本本身是纯 grep 检查，秒级完成，因此不做缓存、也不与其他 job 合并。
