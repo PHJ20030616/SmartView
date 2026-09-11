@@ -170,6 +170,17 @@ jobs:
         working-directory: smartview-ai
         run: python -m pytest
 
+  # 文档门禁单独成 job：文档漂移不会让任何单元测试变红，只能靠独立检查兜住。
+  # 脚本本身是纯 grep 检查，秒级完成，因此不做缓存、也不与其他 job 合并。
+  docs:
+    name: 文档一致性
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查文档中的类名、命令与文档索引
+        run: bash scripts/check-docs.sh
+
   web:
     name: 前端检查与测试
     runs-on: ubuntu-latest

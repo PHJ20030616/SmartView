@@ -1,1 +1,5 @@
-smartview-infra/mysql/init/*.sh text eol=lf
+# Shell 脚本一律以 LF 检出。
+# 原因：Windows 上 core.autocrlf=true 会把文本文件转成 CRLF，而带 CRLF 的 .sh
+# 在 bash 中会报 "bad interpreter: /bin/bash^M" 而无法执行；
+# CI（ubuntu-latest）与本地 Git Bash / WSL 都要求 LF。
+*.sh text eol=lf

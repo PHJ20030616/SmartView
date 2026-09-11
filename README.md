@@ -48,7 +48,7 @@ MVP 必须跑通以下主链路：
 
 ## 技术选型说明
 
-项目当前选型优先服务于 MVP 快速落地，同时保留企业级演进空间。核心原则是通过 `AiServiceClient`、`ObjectStorageService`、`VectorStoreService` 等内部接口隔离具体实现，避免业务流程直接绑定单一框架或存储产品。
+项目当前选型优先服务于 MVP 快速落地，同时保留企业级演进空间。核心原则是让业务流程依赖模块内的封装，而不直接绑定具体产品：AI 服务调用统一经 `com.smartview.ai.client.AiInterviewClient`，对象存储统一经 `com.smartview.infra.minio.MinioService`；向量化与检索能力由 `smartview-ai` 服务侧的 Chroma 客户端承担，Java 侧没有对应封装。业务代码不得直接使用底层 SDK 或 HTTP 客户端。
 
 **关键职责分离：**
 - **Spring Boot**：负责业务主流程、鉴权、数据落库、任务编排和阶段决策（`StagePolicyEngine`）
@@ -105,7 +105,7 @@ flowchart TB
         Interview[面试会话与问答]
         Report[报告与历史]
         Task[AI 任务编排]
-        AiClient[AiServiceClient]
+        AiClient[AiInterviewClient]
     end
 
     subgraph AIService[AI 能力层]
@@ -583,7 +583,7 @@ flowchart TD
 关键规则：
 
 - 前端不手写业务接口类型，只使用 OpenAPI 生成的 TypeScript Client。
-- Spring Boot 调用 FastAPI 必须走统一的 `AiServiceClient`。
+- Spring Boot 调用 FastAPI 必须走统一的 `AiInterviewClient`；新增 AI 能力时在该客户端中扩展方法，不得在业务代码里另起 HTTP 调用。
 - MQ 消息至少包含 `taskId`、`traceId`、`messageType`、`schemaVersion`、`retryCount`、`createdAt`。
 - 生成目录不可手工修改；如果生成代码不满足需求，先修改契约。
 
@@ -653,7 +653,7 @@ flowchart TB
 - [ ] 系统可以生成面试报告和每题参考答案。
 - [ ] 页面刷新后可以恢复当前面试会话。
 - [ ] 前端不直接调用 FastAPI。
-- [ ] Spring Boot 不绕过 `AiServiceClient` 调 FastAPI。
+- [ ] Spring Boot 不绕过 `AiInterviewClient` 调 FastAPI。
 - [ ] MQ 消息符合 JSON Schema。
 - [ ] MQ 任务投递、消费和重试具备幂等保障。
 - [ ] OpenAPI 契约可以生成前端 Client。
@@ -668,9 +668,10 @@ flowchart TB
 cd smartview-infra
 docker compose up -d
 
-# 启动 Spring Boot
+# 启动 Spring Boot（本项目不带 Maven Wrapper，使用系统 mvn；
+# Spring Boot 3.5 官方要求 Maven 3.6.3+，请先用 mvn -v 确认版本）
 cd ../smartview-server
-./mvnw spring-boot:run
+mvn spring-boot:run
 
 # 启动 FastAPI
 cd ../smartview-ai
@@ -684,16 +685,16 @@ npm run dev
 
 **核心规范文档（必读）：**
 
+- `docs/local-development.md`：本地启动、环境变量、常见问题。
 - `docs/interview-policy.md`：面试策略与执行规范，定义职责边界、阶段控制、候选池、幂等性和降级规则。
 - `docs/resume-workflow.md`：简历处理工作流，定义上传、解析、向量入库、画像分析的完整时序。
 - `docs/architecture-improvements.md`：架构优化总结，记录已解决的 8 个核心问题及待实施清单。
 
-**后续建议补充文档：**
+**后续建议补充文档（规划中，尚未创建）：**
 
-- `docs/local-development.md`：本地启动、环境变量、常见问题。
-- `docs/api-contracts.md`：OpenAPI 生成、契约变更流程。
-- `docs/mq-contracts.md`：MQ Schema、消息版本、重试与幂等。
-- `docs/knowledge-ingestion.md`：八股知识与面经材料入库流程。
+- `docs/api-contracts.md`（规划中）：OpenAPI 生成、契约变更流程。
+- `docs/mq-contracts.md`（规划中）：MQ Schema、消息版本、重试与幂等。
+- `docs/knowledge-ingestion.md`（规划中）：八股知识与面经材料入库流程。
 
 ## 工程约束
 
