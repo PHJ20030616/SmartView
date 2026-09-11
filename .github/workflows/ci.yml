@@ -1,0 +1,189 @@
+name: CI
+
+# 触发范围：主分支推送与全部 Pull Request。
+# 目标是让"契约漂移、测试失败、类型错误"在合并前暴露，而不是靠本地自觉。
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# 同一分支的新推送取消上一轮未完成的运行，避免排队浪费额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-drift:
+    name: 契约漂移检测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: smartview-web/package-lock.json
+
+      - name: 校验 OpenAPI 契约语法
+        working-directory: smartview-web
+        run: |
+          npm ci
+          npx --yes @openapitools/openapi-generator-cli@7.23.0 validate -i ../contracts/web-api/openapi.yaml
+
+      - name: 重新生成前端契约类型
+        working-directory: smartview-web
+        run: npm run generate:api
+
+      # schema.ts 是生成产物但被提交进版本库，因此"契约改了却没重新生成"
+      # 会表现为工作区差异——这正是最容易被漏掉、又最难靠 review 发现的一类漂移。
+      - name: 检测契约漂移
+        run: |
+          if ! git diff --exit-code -- smartview-web/src/api/generated/schema.ts; then
+            echo "::error::contracts/web-api/openapi.yaml 已变更，但 smartview-web/src/api/generated/schema.ts 未同步重新生成并提交。"
+            echo "本地修复：cd smartview-web && npm run generate:api"
+            exit 1
+          fi
+
+      # 后端 DTO 由 pom.xml 的 models 白名单决定生成哪些，白名单漏加时
+      # 代码不会报错（无人引用的 DTO 缺失不编译失败），因此单独校验一次。
+      - name: 校验后端生成模型白名单
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          contract = yaml.safe_load(
+              Path("contracts/web-api/openapi.yaml").read_text(encoding="utf-8")
+          )
+          schemas = set(contract.get("components", {}).get("schemas", {}))
+
+          pom = Path("smartview-server/pom.xml").read_text(encoding="utf-8")
+          match = re.search(r"<models>([^<]*)</models>", pom)
+          if not match:
+              print("::error::smartview-server/pom.xml 中未找到 openapi-generator 的 <models> 白名单")
+              sys.exit(1)
+
+          listed = [name.strip() for name in match.group(1).split(",") if name.strip()]
+          missing = [name for name in listed if name not in schemas]
+          if missing:
+              print(f"::error::pom.xml 白名单中的 schema 在契约里不存在：{missing}")
+              sys.exit(1)
+
+          print(f"白名单 {len(listed)} 项全部存在于契约（契约共 {len(schemas)} 个 schema）")
+          PY
+
+  backend:
+    name: 后端测试
+    runs-on: ubuntu-latest
+    # 集成测试使用 application-test.yml（smartview_test 库 + 本地 MinIO），
+    # 因此这里用 service container 复现本地依赖，而不是把集成测试排除掉——
+    # 被排除的测试等于没有门禁。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: '123456'
+          MYSQL_DATABASE: smartview_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -p123456"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: smartview
+          MINIO_ROOT_PASSWORD: smartview123
+        ports:
+          - 9000:9000
+        # MinIO 官方存活探针；容器就绪前不启动测试，避免偶发认证失败。
+        options: >-
+          --health-cmd="curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+        command: server /data
+    env:
+      # 与 smartview-infra/.env 对齐的连接参数，供 application-test.yml 的默认值消费。
+      MYSQL_USERNAME: root
+      MYSQL_PASSWORD: '123456'
+      MINIO_ROOT_USER: smartview
+      MINIO_ROOT_PASSWORD: smartview123
+      # application-test.yml 自带测试密钥；这里同时注入，模拟"部署环境已正确配置"的现实。
+      JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # 使用 mc 兜底创建测试桶：若应用自身会 ensureBucket，这里是幂等空操作；
+      # 若不会，则避免一批上传相关用例因缺桶而失败。
+      - name: 准备对象存储测试桶
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set ci http://localhost:9000 smartview smartview123
+          mc mb --ignore-existing ci/smartview
+
+      - name: 运行后端测试
+        working-directory: smartview-server
+        run: mvn -B test
+
+  ai:
+    name: AI 服务测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: smartview-ai/pyproject.toml
+
+      # 本仓库没有 requirements.txt，依赖声明在 pyproject.toml 的 test extra 中；
+      # 只装 test extra 而不装重达数百 MB 的 ocr extra，OCR 相关代码需保持可延迟导入。
+      - name: 安装依赖
+        working-directory: smartview-ai
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: 运行 pytest
+        working-directory: smartview-ai
+        run: python -m pytest
+
+  web:
+    name: 前端检查与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: smartview-web/package-lock.json
+
+      - name: 安装依赖
+        working-directory: smartview-web
+        run: npm ci
+
+      - name: 类型检查
+        working-directory: smartview-web
+        run: npm run typecheck
+
+      - name: 运行单测
+        working-directory: smartview-web
+        run: npm test
