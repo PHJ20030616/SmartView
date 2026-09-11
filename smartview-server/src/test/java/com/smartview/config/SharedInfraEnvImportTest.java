@@ -83,9 +83,14 @@ class SharedInfraEnvImportTest {
                         + "所有 ${VAR:default} 都会静默走回退值")
                 .isNotEmpty();
 
+        // 必须两条都在，而不是"至少有一条能对上"。
+        // 两条各自负责一种工作目录（见 ALLOWED_IMPORT_LOCATIONS 的说明）：
+        // 只留下一条时，另一种启动方式会静默失去 .env——例如删掉带 ../ 的那条，
+        // README 推荐的 mvn spring-boot:run（默认工作目录就是 smartview-server/）就再也读不到配置。
+        // 用 anyMatch 会放过这种"坏了一半"的状态，因此这里要求全部命中。
         assertThat(importLocations)
-                .as("导入声明必须精确等于下列受支持路径之一（前缀或路径写法偏差都会让 .env 失效，"
-                        + "而 ${VAR:default} 会静默回落）：%s", ALLOWED_IMPORT_LOCATIONS)
-                .anyMatch(ALLOWED_IMPORT_LOCATIONS::contains);
+                .as("application.yml 必须同时声明下列两个受支持路径（缺一条就会让某一种工作目录静默失去 .env）：%s",
+                        ALLOWED_IMPORT_LOCATIONS)
+                .containsAll(ALLOWED_IMPORT_LOCATIONS);
     }
 }
