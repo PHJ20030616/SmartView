@@ -53,6 +53,16 @@ def reset_trace_id(token: contextvars.Token) -> None:
     TRACE_ID_CONTEXT.reset(token)
 
 
+def current_trace_id() -> str | None:
+    """读取当前上下文的追踪 ID；不在请求或 MQ 任务上下文中时返回 None。
+
+    埋点需要把一次 LLM 调用挂回它所服务的请求链路，而各调用点未必都在
+    显式传递 trace_id（历史上 resume_parser 就传了一个从未被使用的参数）。
+    统一从上下文变量读取，可以让埋点覆盖全部场景而不必逐处铺管道。
+    """
+    return TRACE_ID_CONTEXT.get() or None
+
+
 def register_trace_middleware(app: FastAPI) -> None:
     """
     注册追踪 ID 中间件

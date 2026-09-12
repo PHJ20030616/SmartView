@@ -290,6 +290,14 @@ class Settings(BaseSettings):
             normalized_origins.append(f"{parsed.scheme}://{host_for_origin}:{port}")
         return normalized_origins
 
+    # LLM 调用可观测配置。
+    # 默认开启：没有调用级数据就无法把指标变化归因到 prompt 迭代还是模型波动（plan_1.1 §7 顺序约束）。
+    # 关闭后调用行为与埋点引入前完全一致，用于对照排查"是不是埋点本身引入了问题"。
+    llm_log_enabled: bool = Field(default=True, alias="LLM_LOG_ENABLED")
+    # prompt 版本：Phase 14 引入按场景的 prompt 文件后改为逐场景读取；
+    # 现在先固定单版本，使指标自今天起就能按版本归因，而不是等 Phase 14 才开始记录。
+    llm_prompt_version: str = Field(default="p0", alias="LLM_PROMPT_VERSION")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

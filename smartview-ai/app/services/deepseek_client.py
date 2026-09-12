@@ -8,14 +8,20 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.trace import current_trace_id
+from app.observability.llm_call_log import LlmCallRecord, hash_messages, record_llm_call
 
 log = logging.getLogger(__name__)
+
+# 模型提供方标识：写死而非从 base_url 推断，避免以后换代理地址时历史数据被切成两类。
+_PROVIDER_NAME = "deepseek"
 
 
 def parse_json_content(content: Any, *, what: str = "结果") -> dict[str, Any]:
@@ -106,6 +112,9 @@ async def call_deepseek_json(
         "response_format": {"type": "json_object"},
     }
     log.info("调用 DeepSeek 生成%s scene=%s repair=%s", what, scene, bool(repair_error))
+    started = time.perf_counter()
+    # usage 由响应体的 usage 字段填充；失败路径拿不到用量，因此默认空字典。
+    usage: dict[str, Any] = {}
     try:
         async with httpx.AsyncClient(
             base_url=settings.deepseek_base_url.rstrip("/"),
@@ -118,16 +127,92 @@ async def call_deepseek_json(
             )
             response.raise_for_status()
             body = response.json()
+            # usage 是 OpenAI 兼容协议的可选字段；缺失时保持空，不因此判定调用失败。
+            usage = body.get("usage") or {}
             content = body["choices"][0]["message"]["content"]
             parsed = parse_json_content(content, what=what)
-            log.info("DeepSeek 生成%s成功", what)
-            return parsed
-    except AppError:
+    except AppError as exc:
+        # 业务侧可识别的失败（JSON 为空/格式无效等），错误码原样落库便于按原因聚合。
+        await _record_call(
+            messages,
+            settings,
+            scene=scene,
+            started=started,
+            repair_error=repair_error,
+            error_code=exc.code,
+            error_message=exc.message,
+        )
         raise
     except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         log.exception("DeepSeek 生成%s失败", what)
+        error_message = "AI 生成服务暂时不可用，请稍后重试"
+        await _record_call(
+            messages,
+            settings,
+            scene=scene,
+            started=started,
+            repair_error=repair_error,
+            error_code="LLM_REQUEST_FAILED",
+            error_message=error_message,
+        )
         raise AppError(
-            "AI 生成服务暂时不可用，请稍后重试",
+            error_message,
             code="LLM_REQUEST_FAILED",
             status_code=502,
         ) from exc
+
+    await _record_call(
+        messages,
+        settings,
+        scene=scene,
+        started=started,
+        repair_error=repair_error,
+        usage=usage,
+    )
+    log.info(
+        "DeepSeek 生成%s成功 scene=%s latency_ms=%s",
+        what,
+        scene,
+        int((time.perf_counter() - started) * 1000),
+    )
+    return parsed
+
+
+async def _record_call(
+    messages: list[dict[str, str]],
+    settings: Settings,
+    *,
+    scene: str,
+    started: float,
+    repair_error: str | None,
+    usage: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """组装并写入一条调用记录，字段全部取自本次调用的实际观测值。
+
+    注意这里调用的是 messages（未追加修复指令的原始提示词）：request_hash 表示
+    "同一个业务请求"，修复调用与首次调用应当同哈希，靠 retry_attempt 区分，
+    这样"修复率"才是一个可统计的量。
+    """
+    usage = usage or {}
+    record = LlmCallRecord(
+        scene=scene,
+        provider=_PROVIDER_NAME,
+        model=settings.deepseek_model,
+        status="FAILED" if error_code else "SUCCESS",
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        retry_attempt=1 if repair_error else 0,
+        trace_id=current_trace_id(),
+        prompt_version=settings.llm_prompt_version,
+        request_hash=hash_messages(messages),
+        request_chars=sum(len(message.get("content") or "") for message in messages),
+        temperature=settings.deepseek_temperature,
+        max_tokens=settings.deepseek_max_tokens,
+        token_input=usage.get("prompt_tokens"),
+        token_output=usage.get("completion_tokens"),
+        token_total=usage.get("total_tokens"),
+        error_code=error_code,
+        error_message=error_message,
+    )
+    await record_llm_call(record, settings=settings)
