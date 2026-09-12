@@ -98,7 +98,7 @@ def test_answer_type_mapped_by_stage_deterministically(monkeypatch) -> None:
     ]
     stage_by = {"1": "BASIC", "2": "PROJECT", "3": "SCENARIO"}
 
-    async def fake_call(messages, settings, *, what="结果", repair_error=None):
+    async def fake_call(messages, settings, *, what="结果", repair_error=None, **_kwargs):
         return {
             "referenceAnswers": [
                 {"questionId": "1", "referenceContent": "内容1", "keyPoints": ["k"], "tradeoffs": []},
@@ -153,7 +153,7 @@ def test_reference_answers_missing_question_raises_app_error(monkeypatch) -> Non
     }
     calls: list[str | None] = []
 
-    async def fake_call(messages, settings, *, what="参考答案", repair_error=None):
+    async def fake_call(messages, settings, *, what="参考答案", repair_error=None, **_kwargs):
         calls.append(repair_error)
         return incomplete
 
@@ -206,7 +206,7 @@ def test_narrative_second_validation_failure_raises_app_error(monkeypatch) -> No
     incomplete = {"summary": "总体评价"}  # 缺 strengths/weaknesses/riskPoints/suggestions
     calls: list[str | None] = []
 
-    async def fake_call(messages, settings, *, what="报告评语", repair_error=None):
+    async def fake_call(messages, settings, *, what="报告评语", repair_error=None, **_kwargs):
         # 两次调用均返回缺字段 payload：首次 _validate 失败触发带修复上下文的二次调用，
         # 修复后仍校验失败 → generate 抛 AppError（确定性终态，worker 不再重试）。
         calls.append(repair_error)

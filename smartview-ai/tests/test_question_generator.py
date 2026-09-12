@@ -55,7 +55,7 @@ def _llm_payload(**overrides) -> dict:
 
 
 def _patch_llm(monkeypatch, payload) -> None:
-    async def fake(messages, settings, *, what="候选题", repair_error=None):
+    async def fake(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         return payload
 
     monkeypatch.setattr(qg, "call_deepseek_json", fake)
@@ -64,7 +64,7 @@ def _patch_llm(monkeypatch, payload) -> None:
 def test_pre_generated_target_builds_candidate(monkeypatch) -> None:
     captured = {}
 
-    async def fake(messages, settings, *, what="候选题", repair_error=None):
+    async def fake(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         captured["user"] = user
         return _llm_payload()
@@ -84,7 +84,7 @@ def test_pre_generated_target_builds_candidate(monkeypatch) -> None:
 def test_follow_up_target_passes_evaluation_facts(monkeypatch) -> None:
     captured = {}
 
-    async def fake(messages, settings, *, what="候选题", repair_error=None):
+    async def fake(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         captured["user"] = user
         return _llm_payload(reason="基于缺失要点追问")
@@ -121,7 +121,7 @@ def test_invalid_source_type_normalized(monkeypatch) -> None:
 
 
 def test_single_target_llm_failure_is_degraded(monkeypatch) -> None:
-    async def failing(messages, settings, *, what="候选题", repair_error=None):
+    async def failing(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         raise AppError("AI 生成服务暂时不可用", code="LLM_REQUEST_FAILED")
 
     monkeypatch.setattr(qg, "call_deepseek_json", failing)
@@ -135,7 +135,7 @@ def test_single_target_llm_failure_is_degraded(monkeypatch) -> None:
 def test_failed_target_does_not_block_successful_target(monkeypatch) -> None:
     call_count = 0
 
-    async def flaky(messages, settings, *, what="候选题", repair_error=None):
+    async def flaky(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:

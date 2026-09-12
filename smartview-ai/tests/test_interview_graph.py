@@ -94,10 +94,12 @@ def _patch_dependencies(monkeypatch, *, profile=None, llm=None, retrievers=None)
     )
 
     if llm is not None:
-        async def fake_llm(messages, settings, *, what="首题", repair_error=None):
+        async def fake_llm(messages, settings, *, what="首题", repair_error=None, **_kwargs):
             # llm 可以是固定 dict（直接返回）或 callable（动态生成/捕获断言）
             if callable(llm):
-                return await llm(messages, settings, what=what, repair_error=repair_error)
+                return await llm(
+                    messages, settings, what=what, repair_error=repair_error, **_kwargs
+                )
             return llm
 
         monkeypatch.setattr(interview_graph, "call_deepseek_json", fake_llm)
@@ -141,7 +143,7 @@ def test_generate_success_assembles_question(monkeypatch) -> None:
 def test_basic_topics_extracted_from_stage_plan(monkeypatch) -> None:
     captured = {}
 
-    async def fake_llm(messages, settings, *, what="首题", repair_error=None):
+    async def fake_llm(messages, settings, *, what="首题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         captured["user"] = user
         return _llm_payload()
@@ -158,7 +160,7 @@ def test_basic_topics_extracted_from_stage_plan(monkeypatch) -> None:
 def test_missing_basic_topics_falls_back_to_default(monkeypatch) -> None:
     captured = {}
 
-    async def fake_llm(messages, settings, *, what="首题", repair_error=None):
+    async def fake_llm(messages, settings, *, what="首题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         captured["user"] = user
         return _llm_payload()
@@ -232,7 +234,7 @@ def test_empty_retrieval_still_generates_question(monkeypatch) -> None:
 
 
 def test_llm_error_returns_failure_response(monkeypatch) -> None:
-    async def failing_llm(messages, settings, *, what="首题", repair_error=None):
+    async def failing_llm(messages, settings, *, what="首题", repair_error=None, **_kwargs):
         raise AppError("AI 生成服务暂时不可用", code="LLM_REQUEST_FAILED")
 
     graph = _patch_dependencies(monkeypatch, llm=failing_llm)

@@ -10,7 +10,6 @@ import json
 import logging
 from typing import Any, Mapping
 
-import httpx
 from pydantic import ValidationError
 from sqlalchemy import Engine, text
 
@@ -20,6 +19,7 @@ from app.retrievers.experience_retriever import retrieve_experience
 from app.retrievers.knowledge_retriever import retrieve_knowledge
 from app.retrievers.resume_retriever import retrieve_resume_context
 from app.schemas.profile import ProfileAnalysis
+from app.services.deepseek_client import call_deepseek_json
 from app.services.resume_vectorizer import build_mysql_engine
 
 log = logging.getLogger(__name__)
@@ -300,101 +300,26 @@ def _render(value: Any) -> str:
         return str(value)
 
 
-def _parse_json_content(content: Any) -> dict[str, Any]:
-    """兼容模型偶尔包裹 ```json 代码围栏的情况，同时禁止非对象结果。"""
-    if not isinstance(content, str) or not content.strip():
-        raise AppError(
-            "模型返回的画像分析 JSON 为空或格式无效",
-            code="LLM_INVALID_JSON",
-            status_code=502,
-        )
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].lstrip()
-    try:
-        value = json.loads(cleaned)
-    except json.JSONDecodeError:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start < 0 or end <= start:
-            raise AppError(
-                "模型返回的画像分析 JSON 格式无效",
-                code="LLM_INVALID_JSON",
-                status_code=502,
-            )
-        try:
-            value = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise AppError(
-                "模型返回的画像分析 JSON 格式无效",
-                code="LLM_INVALID_JSON",
-                status_code=502,
-            ) from exc
-    if not isinstance(value, dict):
-        raise AppError(
-            "模型返回的画像分析结果不是 JSON 对象",
-            code="LLM_INVALID_JSON",
-            status_code=502,
-        )
-    return value
-
-
 async def _call_deepseek_json(
     messages: list[dict[str, str]],
     settings: Settings,
+    *,
     repair_error: str | None = None,
 ) -> dict[str, Any]:
-    """调用 DeepSeek JSON 模式；API Key 缺失时给出明确配置错误。"""
-    api_key = settings.deepseek_api_key.get_secret_value().strip()
-    if not api_key:
-        raise AppError(
-            "未配置 DeepSeek API Key，请检查 .env 配置",
-            code="LLM_CONFIG_MISSING",
-            status_code=503,
-        )
-    prompt_messages = list(messages)
-    if repair_error:
-        prompt_messages.append(
-            {
-                "role": "user",
-                "content": f"上一次 JSON 校验失败，错误是：{repair_error}。"
-                "请重新输出符合字段要求的 JSON。",
-            }
-        )
-    payload = {
-        "model": settings.deepseek_model,
-        "messages": prompt_messages,
-        "temperature": settings.deepseek_temperature,
-        "max_tokens": settings.deepseek_max_tokens,
-        "response_format": {"type": "json_object"},
-    }
-    log.info("调用 DeepSeek 画像分析 repair=%s", bool(repair_error))
-    try:
-        async with httpx.AsyncClient(
-            base_url=settings.deepseek_base_url.rstrip("/"),
-            timeout=settings.deepseek_timeout_seconds,
-        ) as client:
-            response = await client.post(
-                "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-            )
-            response.raise_for_status()
-            body = response.json()
-            content = body["choices"][0]["message"]["content"]
-            parsed = _parse_json_content(content)
-            log.info("DeepSeek 画像分析调用成功")
-            return parsed
-    except AppError:
-        raise
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        log.exception("DeepSeek 画像分析失败")
-        raise AppError(
-            "画像分析服务暂时不可用，请稍后重试",
-            code="LLM_REQUEST_FAILED",
-            status_code=502,
-        ) from exc
+    """画像分析的 LLM 入口适配层。
+
+    原先这里有一份自己的 httpx 调用与 JSON 解析（与公共版逻辑等价、文案不同），
+    已删除并改为委托 app.services.deepseek_client——这样埋点只需在公共入口做一次
+    （plan_1.1 §5.2/§5.3），不会漏掉画像分析链路。
+    保留本函数是为了固定 scene=profile_analyze、what=画像分析 两个场景参数。
+    """
+    return await call_deepseek_json(
+        messages,
+        settings,
+        scene="profile_analyze",
+        what="画像分析",
+        repair_error=repair_error,
+    )
 
 
 async def analyze_profile(

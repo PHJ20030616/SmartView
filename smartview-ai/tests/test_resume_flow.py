@@ -64,7 +64,7 @@ def test_text_pdf_returns_structured_resume(monkeypatch) -> None:
     async def fake_download(state, settings):
         return {"pdf_bytes": pdf_bytes}
 
-    async def fake_llm(raw_text, settings, trace_id, repair_error=None):
+    async def fake_llm(raw_text, settings, repair_error=None):
         payload = _llm_payload(raw_text)
         payload["rawText"] = "模型改写后的文本"
         return payload
@@ -99,7 +99,7 @@ def test_textless_pdf_uses_ocr_fallback(monkeypatch) -> None:
         ocr_calls.append(page_index)
         return "李四\n技能：Java"
 
-    async def fake_llm(raw_text, settings, trace_id, repair_error=None):
+    async def fake_llm(raw_text, settings, repair_error=None):
         return _llm_payload(raw_text)
 
     monkeypatch.setattr(resume_parser, "_download_pdf", fake_download)
@@ -204,7 +204,7 @@ def test_ocr_rejects_pages_that_would_exceed_render_budget() -> None:
 def test_invalid_llm_json_is_repaired_once(monkeypatch) -> None:
     calls: list[str | None] = []
 
-    async def fake_llm(raw_text, settings, trace_id, repair_error=None):
+    async def fake_llm(raw_text, settings, repair_error=None):
         calls.append(repair_error)
         if repair_error is None:
             raise AppError(
@@ -230,41 +230,20 @@ def test_invalid_llm_json_is_repaired_once(monkeypatch) -> None:
     assert calls[1]
 
 
-def test_deepseek_limits_input_text_and_does_not_request_raw_text(monkeypatch) -> None:
-    captured: dict = {}
+def test_resume_llm_messages_truncate_input_and_do_not_request_raw_text() -> None:
+    """截断与提示词内容属于本模块职责，直接在消息层断言。
 
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {"choices": [{"message": {"content": "{}"}}]}
-
-    class FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def post(self, path, headers, json):
-            captured.update(json)
-            return FakeResponse()
-
-    monkeypatch.setattr(resume_parser.httpx, "AsyncClient", lambda **kwargs: FakeClient())
-    asyncio.run(
-        resume_parser._call_deepseek(
-            "A" * 100,
-            Settings(
-                _env_file=None,
-                deepseek_api_key="test-key",
-                deepseek_max_input_characters=20,
-            ),
-            "trace-1",
-        )
+    收敛前这里需要替身 httpx.AsyncClient 才能观察到请求体；收敛后 HTTP 细节
+    归公共客户端，本模块只对"送进模型的消息"负责，断言因此更贴近被测职责。
+    """
+    settings = Settings(
+        _env_file=None,
+        deepseek_api_key="test-key",
+        deepseek_max_input_characters=20,
     )
 
-    messages = captured["messages"]
+    messages = resume_parser._llm_messages("A" * 100, settings)
+
     assert "A" * 20 in messages[1]["content"]
     assert "A" * 21 not in messages[1]["content"]
     assert "不需要在 JSON 中重复输出原文" in messages[1]["content"]

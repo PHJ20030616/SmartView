@@ -133,13 +133,19 @@ class ReportNarrativeGenerator:
 
     async def generate(self, context: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(context)
-        raw = await call_deepseek_json(prompt, self.settings, what="报告评语")
+        raw = await call_deepseek_json(
+            prompt, self.settings, scene="report_generate", what="报告评语"
+        )
         try:
             return self._validate(raw)
         except ValueError as exc:
             # schema 校验失败做一次带上下文的修复调用。
             repaired = await call_deepseek_json(
-                prompt, self.settings, what="报告评语", repair_error=str(exc)
+                prompt,
+                self.settings,
+                scene="report_generate",
+                what="报告评语",
+                repair_error=str(exc),
             )
             try:
                 return self._validate(repaired)
@@ -205,13 +211,19 @@ class ReferenceAnswerGenerator:
         if not questions:
             return []
         prompt = self._build_prompt(questions)
-        raw = await call_deepseek_json(prompt, self.settings, what="参考答案")
+        raw = await call_deepseek_json(
+            prompt, self.settings, scene="report_generate", what="参考答案"
+        )
         try:
             items = self._validate(raw, stage_by_question)
         except ValueError as exc:
             # schema 校验失败做一次带上下文的修复调用。
             repaired = await call_deepseek_json(
-                prompt, self.settings, what="参考答案", repair_error=str(exc)
+                prompt,
+                self.settings,
+                scene="report_generate",
+                what="参考答案",
+                repair_error=str(exc),
             )
             try:
                 items = self._validate(repaired, stage_by_question)

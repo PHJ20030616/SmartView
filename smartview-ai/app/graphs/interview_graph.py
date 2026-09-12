@@ -205,7 +205,11 @@ class FirstQuestionGraph:
         profile = state["profile"] or {}
         messages = self._build_llm_messages(state, profile)
         payload = await call_deepseek_json(
-            messages, self.settings, what="首题", repair_error=None
+            messages,
+            self.settings,
+            scene="question_generate",
+            what="首题",
+            repair_error=None,
         )
         source_type = self._normalize_source_type(payload.get("sourceType"))
         result = {

@@ -17,7 +17,6 @@ from typing import Any, TypedDict
 from urllib.parse import urljoin, urlparse
 
 import fitz
-import httpx
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
@@ -27,6 +26,7 @@ from app.schemas.resume import (
     ParseResumeResponse,
     ResumeStructuredData,
 )
+from app.services.deepseek_client import call_deepseek_json
 
 log = logging.getLogger(__name__)
 
@@ -523,88 +523,47 @@ def _build_llm_messages(raw_text: str, repair_error: str | None = None) -> list[
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _parse_json_content(content: Any) -> dict[str, Any]:
-    """兼容模型偶尔包裹 ```json 代码围栏的情况，同时禁止非对象结果。"""
-    if not isinstance(content, str) or not content.strip():
-        raise AppError(
-            "模型返回的简历 JSON 为空或格式无效",
-            code="LLM_INVALID_JSON",
-            status_code=502,
-        )
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].lstrip()
-    try:
-        value = json.loads(cleaned)
-    except json.JSONDecodeError:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start < 0 or end <= start:
-            raise AppError("模型返回的简历 JSON 格式无效", code="LLM_INVALID_JSON", status_code=502)
-        try:
-            value = json.loads(cleaned[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise AppError("模型返回的简历 JSON 格式无效", code="LLM_INVALID_JSON", status_code=502) from exc
-    if not isinstance(value, dict):
-        raise AppError("模型返回的简历结果不是 JSON 对象", code="LLM_INVALID_JSON", status_code=502)
-    return value
+def _llm_messages(
+    raw_text: str,
+    settings: Settings,
+    repair_error: str | None = None,
+) -> list[dict[str, str]]:
+    """按配置截断简历文本后构造提示词。
+
+    长简历只截取前段送入模型，避免输入上下文长度和调用成本随文件大小失控；
+    完整原文会在结构化结果返回前由服务端写回 rawText，因此截断不会丢数据。
+    """
+    return _build_llm_messages(
+        raw_text[: settings.deepseek_max_input_characters],
+        repair_error,
+    )
 
 
 async def _call_deepseek(
     raw_text: str,
     settings: Settings,
-    trace_id: str,
     repair_error: str | None = None,
 ) -> dict[str, Any]:
-    """调用 DeepSeek JSON 模式；API Key 缺失时给出明确配置错误。"""
-    api_key = settings.deepseek_api_key.get_secret_value().strip()
-    if not api_key:
-        raise AppError("未配置 DeepSeek API Key，请检查 .env 配置", code="LLM_CONFIG_MISSING", status_code=503)
-    # 长简历只截取前段送入模型，避免输入上下文和调用成本不受文件大小控制；
-    # 完整原文会在结构化结果返回前由服务端写回 rawText。
-    llm_text = raw_text[: settings.deepseek_max_input_characters]
-    payload = {
-        "model": settings.deepseek_model,
-        "messages": _build_llm_messages(llm_text, repair_error),
-        "temperature": settings.deepseek_temperature,
-        "max_tokens": settings.deepseek_max_tokens,
-        "response_format": {"type": "json_object"},
-    }
-    log.info(
-        "调用 DeepSeek 结构化 input_chars=%s repair=%s",
-        len(llm_text),
-        bool(repair_error),
+    """简历结构化的 LLM 入口适配层，统一委托给公共 DeepSeek 客户端。
+
+    原实现自建 httpx 客户端并自带一份 JSON 解析，已删除（plan_1.1 §5.2）。
+    注意入参去掉了 trace_id：链路追踪改由公共入口从 app.core.trace 的上下文变量读取，
+    而原先那个参数在函数体内从未被使用——它是个静默失效的死参数。
+    """
+    return await call_deepseek_json(
+        _llm_messages(raw_text, settings, repair_error),
+        settings,
+        scene="resume_parse",
+        what="简历",
+        repair_error=repair_error,
     )
-    try:
-        async with httpx.AsyncClient(
-            base_url=settings.deepseek_base_url.rstrip("/"),
-            timeout=settings.deepseek_timeout_seconds,
-        ) as client:
-            response = await client.post(
-                "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-            )
-            response.raise_for_status()
-            body = response.json()
-            content = body["choices"][0]["message"]["content"]
-            parsed = _parse_json_content(content)
-            log.info("DeepSeek 结构化调用成功")
-            return parsed
-    except AppError:
-        raise
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        log.exception("DeepSeek 简历结构化失败")
-        raise AppError("简历结构化服务暂时不可用，请稍后重试", code="LLM_REQUEST_FAILED", status_code=502) from exc
 
 
 async def _structure_resume(state: ResumeParserState, settings: Settings) -> dict[str, Any]:
     _raise_if_error(state)
     raw_text = state["raw_text"]
-    trace_id = state["trace_id"]
     try:
-        payload = await _call_deepseek(raw_text, settings, trace_id)
+        payload = await _call_deepseek(raw_text, settings)
     except AppError as first_error:
         if first_error.code != "LLM_INVALID_JSON":
             raise
@@ -612,7 +571,6 @@ async def _structure_resume(state: ResumeParserState, settings: Settings) -> dic
         payload = await _call_deepseek(
             raw_text,
             settings,
-            trace_id,
             repair_error=first_error.message,
         )
     # 原始文本由 PDF/OCR 节点提供，是可信源；不依赖模型重复输出，避免被截断或改写。
@@ -624,7 +582,6 @@ async def _structure_resume(state: ResumeParserState, settings: Settings) -> dic
         repaired_payload = await _call_deepseek(
             raw_text,
             settings,
-            trace_id,
             repair_error=str(first_error),
         )
         repaired_payload["rawText"] = raw_text

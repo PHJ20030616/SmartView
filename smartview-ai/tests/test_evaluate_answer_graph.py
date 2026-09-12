@@ -54,7 +54,7 @@ def _stub(monkeypatch, facts=None):
         }
     monkeypatch.setattr(ae, "evaluate_answer", fake_eval)
 
-    async def fake_llm(messages, settings, *, what="候选题", repair_error=None):
+    async def fake_llm(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         topic = "Java 并发"
         for line in user.splitlines():

@@ -32,7 +32,9 @@ async def generate_one(
     target 字段：stage、topic、candidateType，追问目标另有 basisType/basis。
     """
     messages = _build_messages(state, target)
-    payload = await call_deepseek_json(messages, settings, what="候选题")
+    payload = await call_deepseek_json(
+        messages, settings, scene="question_generate", what="候选题"
+    )
     return _normalize(state, target, payload)
 
 

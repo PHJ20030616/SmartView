@@ -66,7 +66,7 @@ def _payload_for(topic: str) -> dict:
 
 
 def _stub_llm(monkeypatch) -> None:
-    async def fake(messages, settings, *, what="候选题", repair_error=None):
+    async def fake(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         user = next(m["content"] for m in messages if m["role"] == "user")
         # 从用户提示词中提取主题行，按目标主题生成对应内容
         topic = "Java 并发"
@@ -179,7 +179,7 @@ def test_follow_up_not_deduped_by_history_topic(monkeypatch):
 def test_llm_error_returns_failure_response(monkeypatch) -> None:
     from app.core.errors import AppError
 
-    async def failing(messages, settings, *, what="候选题", repair_error=None):
+    async def failing(messages, settings, *, what="候选题", repair_error=None, **_kwargs):
         raise AppError("AI 生成服务暂时不可用", code="LLM_REQUEST_FAILED")
 
     monkeypatch.setattr(qg, "call_deepseek_json", failing)

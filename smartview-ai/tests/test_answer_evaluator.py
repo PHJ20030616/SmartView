@@ -34,7 +34,7 @@ def test_short_answer_considered_weak():
 
 def test_short_confident_answer_not_weak(monkeypatch):
     # 简短但肯定的回答（如"了解"）不应被误判为弱答，应走 LLM 评估
-    async def fake(messages, settings, *, what="回答评估", repair_error=None):
+    async def fake(messages, settings, *, what="回答评估", repair_error=None, **_kwargs):
         return {"score": 80, "level": "GOOD", "matchedPoints": ["了解"],
                 "missingPoints": [], "riskPoints": []}
     monkeypatch.setattr(ae, "call_deepseek_json", fake)
@@ -45,7 +45,7 @@ def test_short_confident_answer_not_weak(monkeypatch):
 
 
 def test_normal_answer_calls_llm_and_normalizes(monkeypatch):
-    async def fake(messages, settings, *, what="回答评估", repair_error=None):
+    async def fake(messages, settings, *, what="回答评估", repair_error=None, **_kwargs):
         assert settings is _settings
         assert what == "回答评估"
         return {"score": 85, "level": "GOOD", "matchedPoints": ["可见性"],

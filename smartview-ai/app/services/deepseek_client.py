@@ -66,13 +66,21 @@ async def call_deepseek_json(
     messages: list[dict[str, str]],
     settings: Settings,
     *,
+    scene: str,
     what: str = "结果",
     repair_error: str | None = None,
 ) -> dict[str, Any]:
     """调用 DeepSeek JSON 模式；API Key 缺失时给出明确配置错误。
 
+    scene 是机器可读的调用场景标识（question_generate / evaluate / report_generate /
+    profile_analyze / resume_parse），与面向用户的中文 what 分离：what 只用于错误文案，
+    scene 用于埋点归因与看板筛选。刻意设为必填——新增调用点时忘记登记场景会直接报错，
+    而不是静默产生一条无法归类的观测数据。
+
     repair_error 非空时在消息末尾追加修复指令，供调用方在校验失败后
     做一次带上下文的修复调用（如 LLM_INVALID_JSON / 字段校验失败）。
+
+    本函数是全部 LLM 调用的唯一入口，也是唯一埋点位置（plan_1.1 §5.2/§5.3）。
     """
     api_key = settings.deepseek_api_key.get_secret_value().strip()
     if not api_key:
@@ -97,7 +105,7 @@ async def call_deepseek_json(
         "max_tokens": settings.deepseek_max_tokens,
         "response_format": {"type": "json_object"},
     }
-    log.info("调用 DeepSeek 生成%s repair=%s", what, bool(repair_error))
+    log.info("调用 DeepSeek 生成%s scene=%s repair=%s", what, scene, bool(repair_error))
     try:
         async with httpx.AsyncClient(
             base_url=settings.deepseek_base_url.rstrip("/"),
