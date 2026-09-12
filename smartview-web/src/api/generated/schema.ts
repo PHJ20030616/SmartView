@@ -387,6 +387,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/llm-calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询 LLM 调用记录
+         * @description 分页查询大模型调用日志，支持按场景、prompt 版本与时间区间过滤， 并在同一响应中返回该过滤条件下的汇总统计（成功率、P95 延迟、token 合计）。 这是跨用户的运维视图，仅对配置白名单内的用户名开放； 未配置白名单时接口对所有人关闭。
+         */
+        get: operations["listLlmCalls"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -412,6 +432,93 @@ export interface components {
              * @description 响应时间
              */
             timestamp: string;
+        };
+        LlmCallListResponse: components["schemas"]["ApiResponse"] & {
+            data?: components["schemas"]["LlmCallPage"];
+        };
+        /** @description 调用记录分页结果（items 按调用时间倒序） */
+        LlmCallPage: {
+            /** @description 当前页调用记录 */
+            items: components["schemas"]["LlmCallSummary"][];
+            /** @description 当前页码，从 1 开始 */
+            page: number;
+            /** @description 每页条数 */
+            size: number;
+            /**
+             * Format: int64
+             * @description 符合条件的总条数
+             */
+            total: number;
+            stats: components["schemas"]["LlmCallStats"];
+        };
+        /** @description 当前过滤条件下的汇总统计（覆盖全部匹配记录，不随分页变化） */
+        LlmCallStats: {
+            /**
+             * Format: int64
+             * @description 调用总次数
+             */
+            totalCalls: number;
+            /**
+             * Format: int64
+             * @description 成功次数
+             */
+            successCalls: number;
+            /**
+             * Format: double
+             * @description 成功率，0~1，保留四位小数；无记录时为 0
+             */
+            successRate: number;
+            /** @description P95 延迟（毫秒）；无记录时为 0 */
+            p95LatencyMs: number;
+            /**
+             * Format: int64
+             * @description token 合计
+             */
+            totalTokens: number;
+        };
+        /** @description 单条 LLM 调用记录（不包含提示词与响应全文） */
+        LlmCallSummary: {
+            /** @description 记录 ID */
+            id: string;
+            /** @description 链路追踪 ID */
+            traceId?: string | null;
+            /**
+             * @description 调用场景
+             * @enum {string}
+             */
+            scene: "question_generate" | "evaluate" | "report_generate" | "profile_analyze" | "resume_parse";
+            /** @description 模型提供方 */
+            provider?: string;
+            /** @description 模型名称 */
+            model: string;
+            /** @description prompt 标识 */
+            promptKey?: string | null;
+            /** @description prompt 版本 */
+            promptVersion?: string | null;
+            /**
+             * @description 调用结果
+             * @enum {string}
+             */
+            status: "SUCCESS" | "FAILED";
+            /** @description 失败错误码 */
+            errorCode?: string | null;
+            /** @description 调用耗时（毫秒） */
+            latencyMs: number;
+            /** @description 输入 token 数 */
+            tokenInput?: number | null;
+            /** @description 输出 token 数 */
+            tokenOutput?: number | null;
+            /** @description 总 token 数 */
+            tokenTotal?: number | null;
+            /** @description 修复重试序号，0=首次调用 */
+            retryAttempt: number;
+            /** @description 提示词 sha256，用于判断是否同一请求 */
+            requestHash?: string | null;
+            /**
+             * Format: date-time
+             * @description 调用时间
+             */
+            createdAt: string;
         };
         ErrorResponse: {
             /** @description 错误码 */
@@ -1805,6 +1912,41 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listLlmCalls: {
+        parameters: {
+            query?: {
+                /** @description 调用场景，留空表示不过滤 */
+                scene?: "question_generate" | "evaluate" | "report_generate" | "profile_analyze" | "resume_parse";
+                /** @description prompt 版本，留空表示不过滤 */
+                promptVersion?: string;
+                /** @description 起始时间（含），ISO-8601，例如 2026-09-01T00:00:00 */
+                from?: string;
+                /** @description 结束时间（不含），ISO-8601 */
+                to?: string;
+                /** @description 页码，从 1 开始 */
+                page?: number;
+                /** @description 每页条数，最大 50 */
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 查询成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmCallListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

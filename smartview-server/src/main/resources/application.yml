@@ -126,6 +126,11 @@ smartview:
       retry-base-delay-ms: ${RESUME_MQ_RETRY_BASE_DELAY_MS:100}
       scheduled-retry-interval-minutes: ${RESUME_MQ_SCHEDULED_RETRY_INTERVAL_MINUTES:5}
       max-scheduled-retry-count: ${RESUME_MQ_MAX_SCHEDULED_RETRY_COUNT:3}
+  llm-call-log:
+    # 允许访问 LLM 调用观测接口的用户名白名单，逗号分隔。
+    # 留空即关闭该接口：llm_call_log 是跨用户的运维视图（表里没有 user_id），
+    # 默认不对外暴露，避免任何登录用户读到他人的调用场景与链路 ID。
+    operator-usernames: ${LLM_CALL_LOG_OPERATOR_USERNAMES:}
   ai-service:
     # FastAPI AI 服务同步调用配置（首题生成等需要同步返回的轻量接口）
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}

@@ -20,6 +20,8 @@ tags:
     description: 面试会话和问答
   - name: 报告
     description: 面试报告查询
+  - name: 可观测
+    description: LLM 调用观测（运维视图）
 
 security:
   - bearerAuth: []
@@ -708,6 +710,74 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/llm-calls:
+    get:
+      tags:
+        - 可观测
+      summary: 查询 LLM 调用记录
+      description: >
+        分页查询大模型调用日志，支持按场景、prompt 版本与时间区间过滤，
+        并在同一响应中返回该过滤条件下的汇总统计（成功率、P95 延迟、token 合计）。
+        这是跨用户的运维视图，仅对配置白名单内的用户名开放；
+        未配置白名单时接口对所有人关闭。
+      operationId: listLlmCalls
+      parameters:
+        - name: scene
+          in: query
+          required: false
+          description: 调用场景，留空表示不过滤
+          schema:
+            type: string
+            enum: [question_generate, evaluate, report_generate, profile_analyze, resume_parse]
+        - name: promptVersion
+          in: query
+          required: false
+          description: prompt 版本，留空表示不过滤
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          description: 起始时间（含），ISO-8601，例如 2026-09-01T00:00:00
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: 结束时间（不含），ISO-8601
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          required: false
+          description: 页码，从 1 开始
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: size
+          in: query
+          required: false
+          description: 每页条数，最大 50
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmCallListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -741,6 +811,144 @@ components:
           type: string
           format: date-time
           description: 响应时间
+
+    LlmCallListResponse:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/LlmCallPage'
+
+    LlmCallPage:
+      type: object
+      description: 调用记录分页结果（items 按调用时间倒序）
+      required:
+        - items
+        - page
+        - size
+        - total
+        - stats
+      properties:
+        items:
+          type: array
+          description: 当前页调用记录
+          items:
+            $ref: '#/components/schemas/LlmCallSummary'
+        page:
+          type: integer
+          description: 当前页码，从 1 开始
+        size:
+          type: integer
+          description: 每页条数
+        total:
+          type: integer
+          format: int64
+          description: 符合条件的总条数
+        stats:
+          $ref: '#/components/schemas/LlmCallStats'
+
+    LlmCallStats:
+      type: object
+      description: 当前过滤条件下的汇总统计（覆盖全部匹配记录，不随分页变化）
+      required:
+        - totalCalls
+        - successCalls
+        - successRate
+        - p95LatencyMs
+        - totalTokens
+      properties:
+        totalCalls:
+          type: integer
+          format: int64
+          description: 调用总次数
+        successCalls:
+          type: integer
+          format: int64
+          description: 成功次数
+        successRate:
+          type: number
+          format: double
+          description: 成功率，0~1，保留四位小数；无记录时为 0
+        p95LatencyMs:
+          type: integer
+          description: P95 延迟（毫秒）；无记录时为 0
+        totalTokens:
+          type: integer
+          format: int64
+          description: token 合计
+
+    LlmCallSummary:
+      type: object
+      description: 单条 LLM 调用记录（不包含提示词与响应全文）
+      required:
+        - id
+        - scene
+        - model
+        - status
+        - latencyMs
+        - retryAttempt
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: 记录 ID
+        traceId:
+          type: string
+          nullable: true
+          description: 链路追踪 ID
+        scene:
+          type: string
+          enum: [question_generate, evaluate, report_generate, profile_analyze, resume_parse]
+          description: 调用场景
+        provider:
+          type: string
+          description: 模型提供方
+        model:
+          type: string
+          description: 模型名称
+        promptKey:
+          type: string
+          nullable: true
+          description: prompt 标识
+        promptVersion:
+          type: string
+          nullable: true
+          description: prompt 版本
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+          description: 调用结果
+        errorCode:
+          type: string
+          nullable: true
+          description: 失败错误码
+        latencyMs:
+          type: integer
+          description: 调用耗时（毫秒）
+        tokenInput:
+          type: integer
+          nullable: true
+          description: 输入 token 数
+        tokenOutput:
+          type: integer
+          nullable: true
+          description: 输出 token 数
+        tokenTotal:
+          type: integer
+          nullable: true
+          description: 总 token 数
+        retryAttempt:
+          type: integer
+          description: 修复重试序号，0=首次调用
+        requestHash:
+          type: string
+          nullable: true
+          description: 提示词 sha256，用于判断是否同一请求
+        createdAt:
+          type: string
+          format: date-time
+          description: 调用时间
 
     ErrorResponse:
       type: object
