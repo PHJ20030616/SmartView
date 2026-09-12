@@ -24,6 +24,20 @@
 
 **要改数据库密码、MinIO 凭据或 JWT 密钥，只改 `smartview-infra/.env` 这一处。**
 
+### 业务级开关
+
+除连接参数与密钥外，`.env` 也是少数业务开关的唯一来源：
+
+| 键 | 归属 | 作用 | 缺省行为 |
+| --- | --- | --- | --- |
+| `LLM_CALL_LOG_OPERATOR_USERNAMES` | Java | LLM 调用观测看板（`/observability`）白名单，英文逗号分隔 | 缺失或为空 = **全部拒绝**，这是有意的失败方向：看板不可用优于越权可见 |
+| `LLM_LOG_ENABLED` | FastAPI | LLM 调用埋点总开关 | 默认开启 |
+| `LLM_PROMPT_VERSION` | FastAPI | 写入调用日志的提示词版本号，用于按 prompt 迭代对比 | `p0` |
+
+Java 侧只读 `smartview-infra/.env`；FastAPI 侧先注入 `smartview-infra/.env`、再读
+`smartview-ai/.env` 里的 Python 专属配置，同名键以 `smartview-infra/.env` 为准。
+因此这三个键都写在 `smartview-infra/.env` 即可，不必分散到两处。
+
 ### 仓库根目录的 `.env` 已废弃，请勿修改
 
 仓库根还存在一份早期留下的 `.env`。它已被 `.gitignore` 忽略、不在任何脚本或配置的引用链路上，
@@ -77,6 +91,12 @@ openssl rand -base64 48
 
 确认三点：改的是 `smartview-infra/.env`（不是仓库根目录那份已废弃的副本）；服务已重启；
 Java 侧启动日志中没有 `Skipped config file` 之类的提示。
+
+**观测看板提示「无权访问 LLM 调用观测数据」**
+
+这不是故障，而是白名单拒绝（HTTP 403）。把当前登录的用户名追加到
+`smartview-infra/.env` 的 `LLM_CALL_LOG_OPERATOR_USERNAMES`（英文逗号分隔）后**重启后端**即可。
+该键缺失时白名单为空，所有账号都会被拒——这是设计上的默认安全方向，不是漏配告警。
 
 **后端启动报 `smartview.jwt.secret` 校验失败**
 
