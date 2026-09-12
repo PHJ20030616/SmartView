@@ -185,6 +185,33 @@
 
 ---
 
+## LLM 调用可观测底座（2026-09-11）
+
+**背景**：LLM 调用此前没有任何调用级数据，只有零散的日志行。缺少调用级数据时，
+prompt 改动带来的指标变化无法与模型自身波动区分，迭代只能凭感觉。
+
+**变更**
+
+1. `smartview-ai` 侧三份重复的 DeepSeek JSON 调用实现收敛为唯一入口
+   `app/services/deepseek_client.py::call_deepseek_json`，由
+   `smartview-ai/tests/test_llm_call_single_entry.py` 守护"入口唯一"。
+2. 在该单点埋点，把场景、模型、prompt 版本、token 用量、耗时、错误码写入新表
+   `llm_call_log`（Flyway V10）。表内不保存 prompt 与响应全文，只有 sha256 与长度。
+3. 新增只读查询接口 `GET /api/llm-calls` 与前端观测看板 `/observability`。
+
+**架构边界的显式例外**
+
+`AGENTS.md` 原本规定"FastAPI 不直接写业务主表"。`llm_call_log` 是技术可观测表而非业务主表，
+因此被登记为该规则的唯一例外，边界为"只许写 `llm_call_log`，不得读写任何业务表"，
+并由 `smartview-ai/tests/test_business_tables_are_never_written.py` 守护。
+
+**尚未完成**
+
+- `biz_type` / `biz_id` 两列已建但未填充：需要按会话归因时再启用，避免为不确定需求预先铺管道。
+- `prompt_key` 留空、`prompt_version` 固定为 `p0`：待 Phase 14 引入按场景的 prompt 文件后逐场景填充。
+
+---
+
 **文档版本：** 1.0  
-**最后更新：** 2026-07-16  
+**最后更新：** 2026-09-11  
 **维护者：** SmartView 开发团队
