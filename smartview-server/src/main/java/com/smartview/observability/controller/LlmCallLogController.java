@@ -9,6 +9,7 @@ import com.smartview.observability.service.LlmCallLogQueryService;
 import com.smartview.security.SecurityContextHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -80,7 +81,10 @@ public class LlmCallLogController {
         String username = SecurityContextHolder.getCurrentUsername();
         if (!properties.isOperator(username)) {
             log.warn("非白名单用户尝试访问 LLM 调用观测接口，username={}", username);
-            throw new BusinessException(ResponseCode.FORBIDDEN, "无权访问 LLM 调用观测数据");
+            // 必须显式传 HttpStatus.FORBIDDEN：BusinessException 的两参构造函数默认落到 400，
+            // 而契约 /api/llm-calls 声明的是 403，前端也按 403 区分"无权限"与"加载失败"。
+            throw new BusinessException(
+                    ResponseCode.FORBIDDEN, "无权访问 LLM 调用观测数据", HttpStatus.FORBIDDEN);
         }
     }
 }

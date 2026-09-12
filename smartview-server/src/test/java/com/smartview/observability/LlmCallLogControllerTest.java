@@ -1,5 +1,6 @@
 package com.smartview.observability;
 
+import com.smartview.common.api.ResponseCode;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.LlmCallPage;
 import com.smartview.generated.web.model.LlmCallStats;
@@ -13,11 +14,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -71,6 +74,23 @@ class LlmCallLogControllerTest {
 
         // 越权请求不得触碰查询逻辑
         verify(queryService, never()).listCalls(any(), any(), any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void forbiddenResponseUsesHttpForbiddenStatus() {
+        // BusinessException 的两参构造函数默认落到 HTTP 400，而契约声明的是 403；
+        // 前端也按 403 区分"无权限"与"加载失败"。这条断言把状态码钉死在契约上，
+        // 因为端到端联调时这类"响应体对、状态码错"的偏差只有真机请求才会暴露。
+        try (MockedStatic<SecurityContextHolder> holder =
+                     mockStatic(SecurityContextHolder.class)) {
+            holder.when(SecurityContextHolder::getCurrentUsername).thenReturn("normal-user");
+
+            assertThatThrownBy(() -> controller.listLlmCalls(null, null, null, null, 1, 20))
+                    .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                        assertThat(exception.getResponseCode()).isEqualTo(ResponseCode.FORBIDDEN);
+                        assertThat(exception.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    });
+        }
     }
 
     @Test
