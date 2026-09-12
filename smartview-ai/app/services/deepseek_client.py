@@ -23,6 +23,13 @@ log = logging.getLogger(__name__)
 # 模型提供方标识：写死而非从 base_url 推断，避免以后换代理地址时历史数据被切成两类。
 _PROVIDER_NAME = "deepseek"
 
+# 客户端自报身份：OpenCode Zen/Go 等网关明确要求客户端用自己的名字标识，
+# 而不是 httpx / SDK 的默认 UA（见 https://opencode.ai/docs/go/ 的 Validated Clients）。
+_USER_AGENT = "smartview-ai/0.1.0"
+
+# 无链路上下文时（本地脚本、定时任务）使用的兜底会话标识。
+_DEFAULT_SESSION_ID = "smartview-ai-offline"
+
 
 def parse_json_content(content: Any, *, what: str = "结果") -> dict[str, Any]:
     """解析模型返回的 JSON；兼容 ```json 代码围栏，并禁止非对象结果。
@@ -135,7 +142,16 @@ async def call_deepseek_json(
         ) as client:
             response = await client.post(
                 "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": _USER_AGENT,
+                    # x-opencode-session：OpenCode Zen/Go 要求按会话维度提供稳定的 session id
+                    # （用于请求路由与提示词缓存），缺失时直接返回 400 MissingSessionID，
+                    # 即"换了 base_url 就整个服务不可用"。链路追踪 ID 是最贴合的现成会话标识：
+                    # 一次用户请求 / 一条 MQ 任务内的多次 LLM 调用共享同一 trace_id，
+                    # 天然满足"同会话稳定、跨会话隔离"。其它网关会忽略这个未知头。
+                    "x-opencode-session": current_trace_id() or _DEFAULT_SESSION_ID,
+                },
                 json=payload,
             )
             response.raise_for_status()

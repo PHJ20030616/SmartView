@@ -18,6 +18,7 @@ import pytest
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.trace import reset_trace_id, set_trace_id
 from app.observability.llm_call_log import LlmCallRecord
 from app.services import deepseek_client
 
@@ -42,8 +43,9 @@ class _CapturingClient:
     def __init__(self, response: httpx.Response | Exception) -> None:
         self.response = response
         self.calls = 0
-        # 记录最后一次请求体，用于断言输出上限等参数确实发给了上游
+        # 记录最后一次请求体与请求头，用于断言输出上限、客户端身份等参数确实发给了上游
         self.last_json: dict | None = None
+        self.last_headers: dict | None = None
 
     def __call__(self, *args, **kwargs):  # noqa: ANN002, ANN003 - 对齐 AsyncClient 构造签名
         return self
@@ -57,6 +59,7 @@ class _CapturingClient:
     async def post(self, *args, **kwargs) -> httpx.Response:  # noqa: ANN002, ANN003
         self.calls += 1
         self.last_json = kwargs.get("json")
+        self.last_headers = kwargs.get("headers")
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
@@ -303,6 +306,46 @@ def test_max_tokens_override_reaches_upstream_and_is_recorded(monkeypatch) -> No
     assert client.last_json is not None
     assert client.last_json["max_tokens"] == 16384
     assert records[0].max_tokens == 16384
+
+
+def test_session_header_carries_trace_id_as_conversation_id(monkeypatch) -> None:
+    """x-opencode-session 必须带稳定会话标识，否则网关直接 400 MissingSessionID。
+
+    用链路追踪 ID 作会话标识：一次请求/一条 MQ 任务内的多次 LLM 调用共享同一 trace_id，
+    换提供商（opencode.ai）时正是靠这个头才能把请求路由出去。
+    """
+    records = _capture_records(monkeypatch)
+    client = _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
+    token = set_trace_id("11111111-2222-3333-4444-555555555555")
+    try:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="evaluate", what="回答评估"
+            )
+        )
+    finally:
+        reset_trace_id(token)
+
+    assert client.last_headers is not None
+    assert client.last_headers["x-opencode-session"] == "11111111-2222-3333-4444-555555555555"
+    # 客户端自报身份，不能是 httpx 的默认 UA
+    assert client.last_headers["User-Agent"] == "smartview-ai/0.1.0"
+    assert records[0].trace_id == "11111111-2222-3333-4444-555555555555"
+
+
+def test_session_header_falls_back_without_trace_context(monkeypatch) -> None:
+    """无链路上下文（脚本/定时任务）时用兜底会话标识，不能发空头。"""
+    _capture_records(monkeypatch)
+    client = _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
+
+    asyncio.run(
+        deepseek_client.call_deepseek_json(
+            MESSAGES, _settings(), scene="evaluate", what="回答评估"
+        )
+    )
+
+    assert client.last_headers is not None
+    assert client.last_headers["x-opencode-session"] == "smartview-ai-offline"
 
 
 def test_record_failure_never_breaks_the_call(monkeypatch) -> None:
