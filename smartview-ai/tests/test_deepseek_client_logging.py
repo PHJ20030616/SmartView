@@ -147,7 +147,41 @@ def test_app_error_path_records_failed_row_with_business_code(monkeypatch) -> No
     assert len(records) == 1
     assert records[0].status == "FAILED"
     assert records[0].error_code == "LLM_INVALID_JSON"
+    # 该响应体本身没有 usage 字段，因此 token 保持为空（与"有 usage 必须记录"区分开）
     assert records[0].token_total is None
+
+
+def test_invalid_json_failure_still_records_token_usage(monkeypatch) -> None:
+    """内容不合法但 HTTP 成功时，仍要记下 token 消耗。
+
+    这类失败在上游已按 token 计费，漏记会让成本统计丢掉最贵的一批失败；
+    也无法通过 token_output 是否贴近 max_tokens 判断输出是否被截断。
+    """
+    records = _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        _json_response(
+            _completion(
+                '{"items": [{"question": "被截断的',
+                {"prompt_tokens": 900, "completion_tokens": 8192, "total_tokens": 9092},
+            )
+        ),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="report_generate", what="参考答案"
+            )
+        )
+
+    assert excinfo.value.code == "LLM_INVALID_JSON"
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == "FAILED"
+    assert record.error_code == "LLM_INVALID_JSON"
+    # 关键断言：失败记录也要带真实的输入/输出/总 token
+    assert (record.token_input, record.token_output, record.token_total) == (900, 8192, 9092)
 
 
 def test_transport_error_path_records_failed_row(monkeypatch) -> None:

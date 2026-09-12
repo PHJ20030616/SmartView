@@ -118,7 +118,9 @@ async def call_deepseek_json(
     }
     log.info("调用 DeepSeek 生成%s scene=%s repair=%s", what, scene, bool(repair_error))
     started = time.perf_counter()
-    # usage 由响应体的 usage 字段填充；失败路径拿不到用量，因此默认空字典。
+    # usage 由响应体的 usage 字段填充。它在内容解析之前就已取到，因此"模型返回的内容
+    # 不合法"这类失败（AppError）同样能记下真实 token 消耗——这些调用在上游已经计费，
+    # 漏记会让成本统计恰好丢掉最贵的一批失败。只有传输层异常（响应都没拿到）才为空。
     usage: dict[str, Any] = {}
     try:
         async with httpx.AsyncClient(
@@ -144,12 +146,16 @@ async def call_deepseek_json(
             parsed = parse_json_content(content, what=what)
     except AppError as exc:
         # 业务侧可识别的失败（JSON 为空/格式无效等），错误码原样落库便于按原因聚合。
+        # usage 必须一起带上：此处失败的是"内容校验"，HTTP 调用本身是成功的，
+        # 上游已按 token 计费。缺失它会让失败记录看不出是"截断"还是"格式跑偏"——
+        # token_output 接近 max_tokens 就说明输出被截断，这是定位失败原因的关键线索。
         await _record_call(
             messages,
             settings,
             scene=scene,
             started=started,
             repair_error=repair_error,
+            usage=usage,
             error_code=exc.code,
             error_message=exc.message,
         )
