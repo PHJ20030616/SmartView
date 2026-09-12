@@ -7,6 +7,7 @@
  * - 内容区域：子路由页面内容
  */
 import {
+  DashboardOutlined,
   FileTextOutlined,
   HomeOutlined,
   LogoutOutlined,
@@ -26,6 +27,9 @@ const menuItems: MenuProps["items"] = [
   { key: "/", icon: <HomeOutlined />, label: "首页" },
   { key: "/resume", icon: <FileTextOutlined />, label: "简历" },
   { key: "/report", icon: <PieChartOutlined />, label: "报告" },
+  // 调用观测是运维视图：菜单对所有登录用户可见，非白名单账号进入后由后端 403
+  // 驱动页面给出明确说明。当前系统没有角色体系，前端无法预知权限。
+  { key: "/observability", icon: <DashboardOutlined />, label: "调用观测" },
 ];
 
 export default function MainLayout() {

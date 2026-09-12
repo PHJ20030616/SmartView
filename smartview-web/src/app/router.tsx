@@ -26,6 +26,7 @@ import InterviewPage from "../pages/interview/InterviewPage";
 import InterviewSessionPage from "../pages/interview/InterviewSessionPage";
 import LoginPage from "../pages/login/LoginPage";
 import RegisterPage from "../pages/login/RegisterPage";
+import LlmCallLogPage from "../pages/observability/LlmCallLogPage";
 import ReportPage from "../pages/report/ReportPage";
 import ResumeConfirmPage from "../pages/resume/ResumeConfirmPage";
 import ResumeHistoryPage from "../pages/resume/ResumeHistoryPage";
@@ -65,6 +66,12 @@ export const appRoutes: RouteObject[] = [
                 element: <InterviewSessionPage />,
               },
               { path: "report", element: <ReportPage /> },
+              {
+                // LLM 调用观测看板：只读运维视图，访问权限由后端白名单控制；
+                // 使用一级路径 /observability，使 MainLayout 的 selectedKey 能直接命中菜单 key
+                path: "observability",
+                element: <LlmCallLogPage />,
+              },
             ],
           },
         ],
