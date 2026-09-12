@@ -25,8 +25,15 @@ class ResumeChunk:
     metadata: dict[str, Any]
 
 
-def build_mysql_engine(settings: Settings) -> Engine:
-    """根据拆分配置创建 MySQL 引擎，避免把数据库凭据放入 MQ。"""
+def build_mysql_engine(
+    settings: Settings, *, connect_timeout_seconds: int | None = None
+) -> Engine:
+    """根据拆分配置创建 MySQL 引擎，避免把数据库凭据放入 MQ。
+
+    connect_timeout_seconds 留空时沿用驱动默认值（pymysql 为 10 秒）。可观测性埋点
+    显式传一个较短的值：MySQL 不可用时，若沿用默认值，每次 LLM 调用都会被建连等待
+    拖长——埋点故障不应放大成业务侧可见的延迟。
+    """
     username = quote_plus(settings.mysql_username)
     password = quote_plus(settings.mysql_password.get_secret_value())
     database = quote_plus(settings.mysql_database)
@@ -34,6 +41,8 @@ def build_mysql_engine(settings: Settings) -> Engine:
         f"mysql+pymysql://{username}:{password}@"
         f"{settings.mysql_host}:{settings.mysql_port}/{database}?charset=utf8mb4"
     )
+    if connect_timeout_seconds is not None:
+        url = f"{url}&connect_timeout={int(connect_timeout_seconds)}"
     return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
 
 

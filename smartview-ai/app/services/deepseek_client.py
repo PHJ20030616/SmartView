@@ -75,6 +75,7 @@ async def call_deepseek_json(
     scene: str,
     what: str = "结果",
     repair_error: str | None = None,
+    unavailable_message: str = "AI 生成服务暂时不可用，请稍后重试",
 ) -> dict[str, Any]:
     """调用 DeepSeek JSON 模式；API Key 缺失时给出明确配置错误。
 
@@ -85,6 +86,10 @@ async def call_deepseek_json(
 
     repair_error 非空时在消息末尾追加修复指令，供调用方在校验失败后
     做一次带上下文的修复调用（如 LLM_INVALID_JSON / 字段校验失败）。
+
+    unavailable_message 供各场景保留自己原有的不可用文案（12.1 收敛前的
+    "画像分析服务暂时不可用"、"简历结构化服务暂时不可用"）。该文案会写进
+    ai_task.error_message 并回显到前端，属用户可见文案，收敛入口时不得改写。
 
     本函数是全部 LLM 调用的唯一入口，也是唯一埋点位置（plan_1.1 §5.2/§5.3）。
     """
@@ -127,8 +132,14 @@ async def call_deepseek_json(
             )
             response.raise_for_status()
             body = response.json()
-            # usage 是 OpenAI 兼容协议的可选字段；缺失时保持空，不因此判定调用失败。
-            usage = body.get("usage") or {}
+            # 网关错误页可能返回 JSON 数组/字符串：不能假设响应体是对象，
+            # 否则抛出的 AttributeError 不在下方 except 元组内，会变成未处理异常。
+            if not isinstance(body, dict):
+                raise TypeError(f"DeepSeek 响应体不是 JSON 对象：{type(body).__name__}")
+            # usage 是 OpenAI 兼容协议的可选字段；缺失或类型异常（非对象）时保持空，
+            # 不因此判定调用失败，也避免后续 usage.get 抛 AttributeError。
+            raw_usage = body.get("usage")
+            usage = raw_usage if isinstance(raw_usage, dict) else {}
             content = body["choices"][0]["message"]["content"]
             parsed = parse_json_content(content, what=what)
     except AppError as exc:
@@ -143,9 +154,16 @@ async def call_deepseek_json(
             error_message=exc.message,
         )
         raise
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        httpx.HTTPError,
+        KeyError,
+        IndexError,
+        TypeError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as exc:
         log.exception("DeepSeek 生成%s失败", what)
-        error_message = "AI 生成服务暂时不可用，请稍后重试"
+        error_message = unavailable_message
         await _record_call(
             messages,
             settings,
@@ -194,25 +212,31 @@ async def _record_call(
     注意这里调用的是 messages（未追加修复指令的原始提示词）：request_hash 表示
     "同一个业务请求"，修复调用与首次调用应当同哈希，靠 retry_attempt 区分，
     这样"修复率"才是一个可统计的量。
+
+    整个函数体包在 try 内：埋点属于旁路能力，任何取值/组装异常都不得让一次
+    已经成功的 LLM 调用变成 500，也不得让失败路径的异常类型发生变化。
     """
-    usage = usage or {}
-    record = LlmCallRecord(
-        scene=scene,
-        provider=_PROVIDER_NAME,
-        model=settings.deepseek_model,
-        status="FAILED" if error_code else "SUCCESS",
-        latency_ms=int((time.perf_counter() - started) * 1000),
-        retry_attempt=1 if repair_error else 0,
-        trace_id=current_trace_id(),
-        prompt_version=settings.llm_prompt_version,
-        request_hash=hash_messages(messages),
-        request_chars=sum(len(message.get("content") or "") for message in messages),
-        temperature=settings.deepseek_temperature,
-        max_tokens=settings.deepseek_max_tokens,
-        token_input=usage.get("prompt_tokens"),
-        token_output=usage.get("completion_tokens"),
-        token_total=usage.get("total_tokens"),
-        error_code=error_code,
-        error_message=error_message,
-    )
-    await record_llm_call(record, settings=settings)
+    try:
+        usage = usage if isinstance(usage, dict) else {}
+        record = LlmCallRecord(
+            scene=scene,
+            provider=_PROVIDER_NAME,
+            model=settings.deepseek_model,
+            status="FAILED" if error_code else "SUCCESS",
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            retry_attempt=1 if repair_error else 0,
+            trace_id=current_trace_id(),
+            prompt_version=settings.llm_prompt_version,
+            request_hash=hash_messages(messages),
+            request_chars=sum(len(message.get("content") or "") for message in messages),
+            temperature=settings.deepseek_temperature,
+            max_tokens=settings.deepseek_max_tokens,
+            token_input=usage.get("prompt_tokens"),
+            token_output=usage.get("completion_tokens"),
+            token_total=usage.get("total_tokens"),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        await record_llm_call(record, settings=settings)
+    except Exception:
+        log.warning("LLM 调用日志组装失败，已忽略（不影响本次调用）", exc_info=True)

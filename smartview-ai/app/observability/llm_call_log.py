@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,8 @@ log = logging.getLogger(__name__)
 # 进程级引擎单例：埋点发生在每次 LLM 调用上，逐次建引擎会带来无谓的连接开销。
 # 测试通过 monkeypatch 覆盖该变量注入 SQLite 替身。
 _cached_engine: Engine | Any | None = None
+# 保护单例首次构建（埋点写入发生在 to_thread 工作线程中，可能并发进入）
+_engine_lock = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -68,8 +71,16 @@ def hash_messages(messages: list[dict[str, str]]) -> str:
     2. 按序列化结果对消息排序，使消息顺序不影响结果——同一业务请求的提示词由
        固定构造器生成，顺序只是实现细节，归因时不应被它区分开。
     ensure_ascii=False 保留中文原样，避免中文提示词因转义方式不同得到两个哈希。
+
+    语义边界：该值表达"归一化后是否同一请求"，**不**用于检出提示词结构变化
+    （那由 prompt_key / prompt_version 承担）。排序后的 json 数组保证编码是单射，
+    不会出现两条不同消息集合得到同一哈希的情况。
     """
-    canonical = "|".join(sorted(_canonical_message(message) for message in messages))
+    canonical = json.dumps(
+        sorted(_canonical_message(message) for message in messages),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -102,14 +113,16 @@ async def record_llm_call(
 
     1. 用 asyncio.to_thread 执行同步 SQLAlchemy 写入。SQLAlchemy 的 Core 引擎是同步的，
        直接在协程里调用会阻塞事件循环；相对秒级的模型调用耗时，一次插入可以忽略。
-    2. 任何异常（库不可用、表不存在、网络抖动）都只记 warning 并返回，绝不向上抛。
+    2. 任何异常（库不可用、表不存在、网络抖动、配置缺失）都只记 warning 并返回，绝不向上抛。
        可观测性故障不得演变成业务故障——面试不能因为日志写不进就中断。
+       因此开关判断也在 try 内：settings 缺省时 get_settings() 可能因配置不完整抛
+       ValidationError，那同样属于"埋点失败"，不应波及主流程。
     3. 开关关闭时提前返回，保证"关闭埋点"是可验证的行为对照基线。
     """
-    runtime_settings = settings or get_settings()
-    if not runtime_settings.llm_log_enabled:
-        return
     try:
+        runtime_settings = settings or get_settings()
+        if not runtime_settings.llm_log_enabled:
+            return
         await asyncio.to_thread(_insert, record, runtime_settings, engine)
     except Exception:  # noqa: BLE001 - 埋点失败必须被吞掉，否则会波及面试主流程
         log.warning("LLM 调用日志写入失败，已忽略（不影响本次调用）", exc_info=True)
@@ -144,10 +157,17 @@ def _insert(record: LlmCallRecord, settings: Settings, engine: Engine | Any | No
 
 
 def _resolve_engine(settings: Settings, engine: Engine | Any | None) -> Engine | Any:
-    """解析要使用的数据库引擎：优先显式传入，其次复用进程级单例。"""
+    """解析要使用的数据库引擎：优先显式传入，其次复用进程级单例。
+
+    单例构建加锁：_insert 跑在 asyncio.to_thread 的工作线程里，并发首批埋点可能同时
+    进入这里，无锁会建出两个连接池并泄漏其中一个。
+    建连超时压到 5 秒：MySQL 不可用时埋点本就会失败，但不该让每次调用都多等驱动默认的 10 秒。
+    """
     if engine is not None:
         return engine
     global _cached_engine
     if _cached_engine is None:
-        _cached_engine = build_mysql_engine(settings)
+        with _engine_lock:
+            if _cached_engine is None:
+                _cached_engine = build_mysql_engine(settings, connect_timeout_seconds=5)
     return _cached_engine

@@ -549,6 +549,8 @@ async def _call_deepseek(
     原实现自建 httpx 客户端并自带一份 JSON 解析，已删除（plan_1.1 §5.2）。
     注意入参去掉了 trace_id：链路追踪改由公共入口从 app.core.trace 的上下文变量读取，
     而原先那个参数在函数体内从未被使用——它是个静默失效的死参数。
+    unavailable_message 显式传回原实现的服务级文案（该文案会写入 ai_task.error_message
+    并回显到前端），避免收敛后用户看到的提示从"简历结构化服务"退化为笼统描述。
     """
     return await call_deepseek_json(
         _llm_messages(raw_text, settings, repair_error),
@@ -556,6 +558,7 @@ async def _call_deepseek(
         scene="resume_parse",
         what="简历",
         repair_error=repair_error,
+        unavailable_message="简历结构化服务暂时不可用，请稍后重试",
     )
 
 

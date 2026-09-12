@@ -74,9 +74,16 @@ export default function LlmCallLogPage() {
         scene: targetScene || undefined,
         page: targetPage,
         size: targetSize,
-        // 区间取左闭右开：结束时间加一天，符合"按天筛选"的直觉，也与后端的 to 为开区间一致
-        from: targetRange ? targetRange[0].startOf("day").toISOString() : undefined,
-        to: targetRange ? targetRange[1].add(1, "day").startOf("day").toISOString() : undefined,
+        // 区间取左闭右开：结束时间加一天，符合"按天筛选"的直觉。
+        // 刻意不用 toISOString()：它输出带 Z 的 UTC 串，而后端把入参解析成本地时间
+        // （LocalDateTime 会静默丢弃时区），东八区下会让窗口整体偏移 8 小时，
+        // 漏掉所选日期 16:00 之后的记录。这里按本地时间格式化，与库内 created_at 对齐。
+        from: targetRange
+          ? targetRange[0].startOf("day").format("YYYY-MM-DDTHH:mm:ss")
+          : undefined,
+        to: targetRange
+          ? targetRange[1].add(1, "day").startOf("day").format("YYYY-MM-DDTHH:mm:ss")
+          : undefined,
       };
 
       void fetchLlmCalls(query, controller.signal)

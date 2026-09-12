@@ -205,6 +205,10 @@ prompt 改动带来的指标变化无法与模型自身波动区分，迭代只�
 因此被登记为该规则的唯一例外，边界为"只许写 `llm_call_log`，不得读写任何业务表"，
 并由 `smartview-ai/tests/test_business_tables_are_never_written.py` 守护。
 
+> 注意：仓库根的 `AGENTS.md` 被 `.gitignore` 忽略（开发机本地规范副本），因此
+> **本节是版本控制内可查的权威登记处**，克隆者与 CI 以此为准；`AGENTS.md` 里的同名小节
+> 供本地 Agent 阅读。
+
 **尚未完成**
 
 - `biz_type` / `biz_id` 两列已建但未填充：需要按会话归因时再启用，避免为不确定需求预先铺管道。

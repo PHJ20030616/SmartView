@@ -311,7 +311,8 @@ async def _call_deepseek_json(
     原先这里有一份自己的 httpx 调用与 JSON 解析（与公共版逻辑等价、文案不同），
     已删除并改为委托 app.services.deepseek_client——这样埋点只需在公共入口做一次
     （plan_1.1 §5.2/§5.3），不会漏掉画像分析链路。
-    保留本函数是为了固定 scene=profile_analyze、what=画像分析 两个场景参数。
+    保留本函数是为了固定 scene=profile_analyze、what=画像分析 两个场景参数；
+    unavailable_message 显式传回原实现的服务级文案，避免收敛后用户看到的错误提示变笼统。
     """
     return await call_deepseek_json(
         messages,
@@ -319,6 +320,7 @@ async def _call_deepseek_json(
         scene="profile_analyze",
         what="画像分析",
         repair_error=repair_error,
+        unavailable_message="画像分析服务暂时不可用，请稍后重试",
     )
 
 

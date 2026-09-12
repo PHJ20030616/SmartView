@@ -62,11 +62,24 @@ public class LlmCallLogController {
         // 防御性收敛：页码限制在 1~MAX_PAGE（防大偏移扫描），每页条数限制在 1~50（契约已声明上限）
         int safePage = Math.max(1, Math.min(page, MAX_PAGE));
         int safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, size));
+        // 空白串统一转成 null：列表查询按"有内容"判断是否过滤，而统计 SQL 只会把空串
+        // 当作无值，两者若不一致会出现"列表有数据、统计全 0"的自相矛盾结果。
+        String safeScene = trimToNull(scene);
+        String safePromptVersion = trimToNull(promptVersion);
         log.info("收到 LLM 调用记录查询请求，scene={}, promptVersion={}, page={}, size={}",
-                scene, promptVersion, safePage, safeSize);
+                safeScene, safePromptVersion, safePage, safeSize);
 
         return ApiResponse.success(
-                queryService.listCalls(scene, promptVersion, from, to, safePage, safeSize));
+                queryService.listCalls(safeScene, safePromptVersion, from, to, safePage, safeSize));
+    }
+
+    /** 空白串归一为 null，使列表查询与统计 SQL 的"是否过滤"判断保持一致。 */
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /**

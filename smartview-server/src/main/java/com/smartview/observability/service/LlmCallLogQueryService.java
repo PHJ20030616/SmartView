@@ -172,11 +172,12 @@ public class LlmCallLogQueryService {
         if (totalCalls <= 0) {
             return 0;
         }
-        // offset 上界收敛到 totalCalls-1，避免只有 1 条记录时越过结果集
-        int offset = (int) Math.min(
-                Math.floor(totalCalls * P95),
-                totalCalls - 1
-        );
+        // 采用 nearest-rank 定义：P95 是第 ceil(0.95 * n) 小的值（0 基下标再减 1）。
+        // 计划片段写的是 floor(n * 0.95)，在默认 20 条/页的常见样本下会直接取到最大值，
+        // 让"P95 延迟"退化成"最大延迟"；改用 ceil 后 20 条样本取第 19 小，口径与直觉一致。
+        int rank = (int) Math.ceil(totalCalls * P95);
+        // rank 至少为 1，且上界收敛到 totalCalls-1，避免越界
+        int offset = Math.min(Math.max(rank - 1, 0), (int) totalCalls - 1);
         Integer latency = llmCallLogMapper.selectLatencyAtOffset(
                 scene, promptVersion, from, to, offset);
         return latency == null ? 0 : latency;
