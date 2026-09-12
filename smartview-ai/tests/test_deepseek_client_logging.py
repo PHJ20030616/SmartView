@@ -42,6 +42,8 @@ class _CapturingClient:
     def __init__(self, response: httpx.Response | Exception) -> None:
         self.response = response
         self.calls = 0
+        # 记录最后一次请求体，用于断言输出上限等参数确实发给了上游
+        self.last_json: dict | None = None
 
     def __call__(self, *args, **kwargs):  # noqa: ANN002, ANN003 - 对齐 AsyncClient 构造签名
         return self
@@ -54,6 +56,7 @@ class _CapturingClient:
 
     async def post(self, *args, **kwargs) -> httpx.Response:  # noqa: ANN002, ANN003
         self.calls += 1
+        self.last_json = kwargs.get("json")
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
@@ -276,6 +279,30 @@ def test_non_object_usage_does_not_break_success_path(monkeypatch) -> None:
     assert len(records) == 1
     assert records[0].status == "SUCCESS"
     assert records[0].token_total is None
+
+
+def test_max_tokens_override_reaches_upstream_and_is_recorded(monkeypatch) -> None:
+    """单次调用的输出上限覆盖必须同时作用到请求与日志。
+
+    日志里记的是**实际生效值**：事后看到 max_tokens=8192 而 token_output=8192，
+    就能判断这次失败是输出被截断，而不是模型自由发挥。
+    """
+    records = _capture_records(monkeypatch)
+    client = _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
+
+    asyncio.run(
+        deepseek_client.call_deepseek_json(
+            MESSAGES,
+            _settings(),
+            scene="report_generate",
+            what="参考答案",
+            max_tokens=16384,
+        )
+    )
+
+    assert client.last_json is not None
+    assert client.last_json["max_tokens"] == 16384
+    assert records[0].max_tokens == 16384
 
 
 def test_record_failure_never_breaks_the_call(monkeypatch) -> None:

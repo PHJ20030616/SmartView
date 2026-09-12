@@ -4,7 +4,8 @@
 - 量化指标（综合得分/准备度/岗位匹配度/覆盖率）由 ReportScorer 确定性计算，
   不依赖 LLM，可单测、可复现；
 - 定性内容（总体评价/优势/薄弱/风险/建议）与每题参考答案由 LLM 结构化生成，
-  输出经 schema 校验，失败时做一次带上下文的修复调用。
+  输出经 schema 校验，失败时做一次带上下文的修复调用（JSON 解析失败与字段校验
+  失败都会触发，见 _is_repairable）。
 
 ReportScorer 作为独立类保留，后续可平移到独立的"得分评测"Agent。
 """
@@ -35,6 +36,28 @@ ANSWER_TYPE_BY_STAGE = {
     "PROJECT": "PROJECT_STRUCTURE",
     "SCENARIO": "SCENARIO_FRAMEWORK",
 }
+
+# 参考答案的输出长度随已答题数量线性增长：一次调用要为**全部**已答题生成
+# referenceContent/keyPoints/tradeoffs。沿用全局 8192 时，多题会话的输出会顶到上限
+# 被截断，而截断后的 JSON 必然解析失败——表现就是"模型返回的参考答案 JSON 格式无效"。
+# 上游实测接受更大的 max_tokens（65536 亦可），因此这里单独放宽，
+# 而不是抬高全局上限去迁就这一条长提示词。
+_REFERENCE_ANSWER_MAX_TOKENS = 16384
+
+
+def _is_repairable(exc: Exception) -> bool:
+    """判断一次失败是否值得再发一次带修复上下文的调用。
+
+    - ValueError：JSON 合法但字段不满足 schema，补上具体错误说明再问一次通常能修好；
+    - AppError(LLM_INVALID_JSON)：模型这次没吐出合法 JSON（长输出被截断是最常见原因），
+      追加修复指令后重发有机会拿到完整输出。
+
+    其它 AppError（未配置密钥、请求失败等）重发同一份提示词不会改变结果，
+    应由 worker 的有界重试处理，这里不做无效修复调用。
+    """
+    if isinstance(exc, ValueError):
+        return True
+    return isinstance(exc, AppError) and exc.code == "LLM_INVALID_JSON"
 
 
 class ReportScorer:
@@ -133,13 +156,16 @@ class ReportNarrativeGenerator:
 
     async def generate(self, context: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(context)
-        raw = await call_deepseek_json(
-            prompt, self.settings, scene="report_generate", what="报告评语"
-        )
         try:
+            raw = await call_deepseek_json(
+                prompt, self.settings, scene="report_generate", what="报告评语"
+            )
             return self._validate(raw)
-        except ValueError as exc:
-            # schema 校验失败做一次带上下文的修复调用。
+        except (AppError, ValueError) as exc:
+            # 两类失败都做一次带上下文的修复调用：模型返回的 JSON 解析失败
+            # （_is_repairable 覆盖）与 JSON 合法但字段不满足 schema。
+            if not _is_repairable(exc):
+                raise
             repaired = await call_deepseek_json(
                 prompt,
                 self.settings,
@@ -211,19 +237,28 @@ class ReferenceAnswerGenerator:
         if not questions:
             return []
         prompt = self._build_prompt(questions)
-        raw = await call_deepseek_json(
-            prompt, self.settings, scene="report_generate", what="参考答案"
-        )
         try:
+            raw = await call_deepseek_json(
+                prompt,
+                self.settings,
+                scene="report_generate",
+                what="参考答案",
+                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS,
+            )
             items = self._validate(raw, stage_by_question)
-        except ValueError as exc:
-            # schema 校验失败做一次带上下文的修复调用。
+        except (AppError, ValueError) as exc:
+            # 与报告评语一致：JSON 解析失败与 schema 校验失败都修复一次。
+            # 修复调用沿用同一份 prompt（request_hash 相同、retry_attempt=1），
+            # 因此"修复率"仍可统计。
+            if not _is_repairable(exc):
+                raise
             repaired = await call_deepseek_json(
                 prompt,
                 self.settings,
                 scene="report_generate",
                 what="参考答案",
                 repair_error=str(exc),
+                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS,
             )
             try:
                 items = self._validate(repaired, stage_by_question)

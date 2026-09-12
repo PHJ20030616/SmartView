@@ -76,6 +76,7 @@ async def call_deepseek_json(
     what: str = "结果",
     repair_error: str | None = None,
     unavailable_message: str = "AI 生成服务暂时不可用，请稍后重试",
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """调用 DeepSeek JSON 模式；API Key 缺失时给出明确配置错误。
 
@@ -90,6 +91,11 @@ async def call_deepseek_json(
     unavailable_message 供各场景保留自己原有的不可用文案（12.1 收敛前的
     "画像分析服务暂时不可用"、"简历结构化服务暂时不可用"）。该文案会写进
     ai_task.error_message 并回显到前端，属用户可见文案，收敛入口时不得改写。
+
+    max_tokens 用于单条提示词覆盖全局输出上限：输出长度随输入规模线性增长的调用
+    （如一次性为全部已答题生成参考答案）用全局值会被截断，而**截断后的 JSON 必然
+    解析失败**，表现出来就是"模型返回的 JSON 格式无效"。未指定时沿用全局配置；
+    实际生效值会写进调用日志的 max_tokens 列，便于事后判断失败是否为截断所致。
 
     本函数是全部 LLM 调用的唯一入口，也是唯一埋点位置（plan_1.1 §5.2/§5.3）。
     """
@@ -113,7 +119,7 @@ async def call_deepseek_json(
         "model": settings.deepseek_model,
         "messages": prompt_messages,
         "temperature": settings.deepseek_temperature,
-        "max_tokens": settings.deepseek_max_tokens,
+        "max_tokens": max_tokens or settings.deepseek_max_tokens,
         "response_format": {"type": "json_object"},
     }
     log.info("调用 DeepSeek 生成%s scene=%s repair=%s", what, scene, bool(repair_error))
@@ -158,6 +164,7 @@ async def call_deepseek_json(
             usage=usage,
             error_code=exc.code,
             error_message=exc.message,
+            max_tokens=max_tokens,
         )
         raise
     except (
@@ -178,6 +185,7 @@ async def call_deepseek_json(
             repair_error=repair_error,
             error_code="LLM_REQUEST_FAILED",
             error_message=error_message,
+            max_tokens=max_tokens,
         )
         raise AppError(
             error_message,
@@ -192,6 +200,7 @@ async def call_deepseek_json(
         started=started,
         repair_error=repair_error,
         usage=usage,
+        max_tokens=max_tokens,
     )
     log.info(
         "DeepSeek 生成%s成功 scene=%s latency_ms=%s",
@@ -212,6 +221,7 @@ async def _record_call(
     usage: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
+    max_tokens: int | None = None,
 ) -> None:
     """组装并写入一条调用记录，字段全部取自本次调用的实际观测值。
 
@@ -236,7 +246,7 @@ async def _record_call(
             request_hash=hash_messages(messages),
             request_chars=sum(len(message.get("content") or "") for message in messages),
             temperature=settings.deepseek_temperature,
-            max_tokens=settings.deepseek_max_tokens,
+            max_tokens=max_tokens or settings.deepseek_max_tokens,
             token_input=usage.get("prompt_tokens"),
             token_output=usage.get("completion_tokens"),
             token_total=usage.get("total_tokens"),

@@ -166,6 +166,61 @@ def test_reference_answers_missing_question_raises_app_error(monkeypatch) -> Non
     assert excinfo.value.code == "REPORT_REFERENCE_VALIDATION_FAILED"
 
 
+def test_reference_answers_invalid_json_triggers_repair_call(monkeypatch) -> None:
+    """模型首次返回非法 JSON（长输出被截断）时也要修复一次，而不是直接进终态。
+
+    修复重试此前只覆盖"JSON 合法但字段不满足 schema"；JSON 解析失败会立刻抛
+    LLM_INVALID_JSON，多题会话一旦被截断就再没有第二次机会。
+    """
+    questions = [{"question_id": "1", "question_text": "Q1", "stage": "BASIC"}]
+    stage_by = {"1": "BASIC"}
+    calls: list[dict] = []
+
+    async def fake_call(messages, settings, *, what="参考答案", repair_error=None, **kwargs):
+        calls.append({"what": what, "repair_error": repair_error, "max_tokens": kwargs.get("max_tokens")})
+        if repair_error is None:
+            raise AppError(
+                "模型返回的参考答案 JSON 格式无效",
+                code="LLM_INVALID_JSON",
+                status_code=502,
+            )
+        return {
+            "referenceAnswers": [
+                {"questionId": "1", "referenceContent": "内容1", "keyPoints": ["k"], "tradeoffs": []}
+            ]
+        }
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    items = asyncio.run(ReferenceAnswerGenerator().generate(questions, stage_by))
+
+    assert len(calls) == 2
+    assert calls[0]["repair_error"] is None
+    # 修复调用必须带上首次错误原文，模型才知道要改什么
+    assert calls[1]["repair_error"] == "模型返回的参考答案 JSON 格式无效"
+    assert items[0]["referenceContent"] == "内容1"
+    # 两次调用都使用放宽后的输出上限，避免修复调用再次被截断
+    assert {call["max_tokens"] for call in calls} == {
+        report_generator._REFERENCE_ANSWER_MAX_TOKENS
+    }
+
+
+def test_reference_answers_transport_failure_is_not_repaired(monkeypatch) -> None:
+    """请求级失败（网络/上游不可用）重发同一份提示词不会改变结果，不做修复调用。"""
+    questions = [{"question_id": "1", "question_text": "Q1", "stage": "BASIC"}]
+    calls: list[str | None] = []
+
+    async def fake_call(messages, settings, *, what="参考答案", repair_error=None, **_kwargs):
+        calls.append(repair_error)
+        raise AppError("AI 生成服务暂时不可用，请稍后重试", code="LLM_REQUEST_FAILED", status_code=502)
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(ReferenceAnswerGenerator().generate(questions, {"1": "BASIC"}))
+
+    assert len(calls) == 1
+    assert excinfo.value.code == "LLM_REQUEST_FAILED"
+
+
 def test_reference_answers_rejects_outside_and_duplicate_question_ids() -> None:
     """越权/外部 questionId 与重复 questionId 一律抛 ValueError，拒绝污染落库数据。"""
     stage_by = {"1": "BASIC", "2": "PROJECT"}
@@ -220,6 +275,36 @@ def test_narrative_second_validation_failure_raises_app_error(monkeypatch) -> No
     assert calls[0] is None
     assert calls[1] is not None
     assert excinfo.value.code == "REPORT_LLM_VALIDATION_FAILED"
+
+
+def test_narrative_invalid_json_triggers_repair_call(monkeypatch) -> None:
+    """报告评语的"JSON 解析失败"也要修复一次，与参考答案路径保持一致。"""
+    complete = {
+        "summary": "总体评价",
+        "strengths": ["优势"],
+        "weaknesses": ["薄弱"],
+        "riskPoints": ["风险"],
+        "suggestions": [{"topic": "主题", "reason": "原因", "resources": ["资料"]}],
+    }
+    calls: list[str | None] = []
+
+    async def fake_call(messages, settings, *, what="报告评语", repair_error=None, **_kwargs):
+        calls.append(repair_error)
+        if repair_error is None:
+            raise AppError(
+                "模型返回的报告评语 JSON 格式无效",
+                code="LLM_INVALID_JSON",
+                status_code=502,
+            )
+        return complete
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    result = asyncio.run(ReportNarrativeGenerator().generate({}))
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1] == "模型返回的报告评语 JSON 格式无效"
+    assert result["summary"] == "总体评价"
 
 
 # ==================== ReportGenerator ====================
