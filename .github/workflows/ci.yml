@@ -138,15 +138,14 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 使用 mc 兜底创建测试桶：若应用自身会 ensureBucket，这里是幂等空操作；
-      # 若不会，则避免一批上传相关用例因缺桶而失败。
-      - name: 准备对象存储测试桶
-        run: |
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-          mc alias set ci http://localhost:9000 smartview smartview123
-          mc mb --ignore-existing ci/smartview
-
+      # 此处曾有一个“准备对象存储测试桶”步骤（从 dl.min.io 下载 mc 客户端并预建桶），现已删除：
+      # 1) MinIO 已下架 dl.min.io 上的 mc 客户端（curl 返回 410 Gone，退出码 22），该步骤必然
+      #    失败；且失败发生在容器就绪之后，会让整个 job 在“运行后端测试”之前中断；
+      # 2) 它本就是冗余兜底——MinioService 构造时会调用 ensureBucketExists()，桶不存在即
+      #    自动 makeBucket。已用“配置一个不存在的合法桶名跑全套后端测试”验证：293 个测试
+      #    全部通过，桶由应用自动创建。
+      # 注意：上述验证的桶名必须符合 S3 规范（仅小写字母/数字/连字符/点）；含下划线会在参数
+      # 构建阶段就抛 IllegalArgumentException，表象与“自建桶失败”一致，实为桶名非法。
       - name: 运行后端测试
         working-directory: smartview-server
         run: mvn -B test
