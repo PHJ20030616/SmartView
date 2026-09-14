@@ -18,17 +18,29 @@ from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
+from app.core.llm_context import reset_llm_context, set_llm_context
 from app.core.logging import configure_logging
 from app.core.trace import reset_trace_id, resolve_trace_id, set_trace_id
 from app.schemas.resume import ResumeParseResult, ResumeParseTask
+from app.services.deepseek_client import close_shared_clients
 from app.services.resume_parser import parse_resume
 
 log = logging.getLogger(__name__)
 
 PublishPayload = Callable[[dict[str, Any]], Awaitable[None]]
 
+# 可重试的确定性错误码集合：只有"重发同一份请求有可能得到不同结果"的失败才在这里。
+# - LLM_REQUEST_FAILED：传输层异常（超时/连接失败）；
+# - LLM_RATE_LIMITED / LLM_UPSTREAM_ERROR：429 与 5xx，上游瞬时状态；
+# - LLM_INVALID_JSON / LLM_SCHEMA_INVALID：内容不合法，重发有机会成功；
+# - OCR_FAILED / RESUME_DOWNLOAD_*：外部依赖的短暂故障，下载与识别可重试。
+# 刻意不含 LLM_REQUEST_REJECTED：其余 4xx 是请求本身被拒（模型名错误、缺鉴权头、
+# 会话 ID 非法），原样重发只会重复失败；简历解析场景尤其明显——每次重试都要
+# 重新下载 PDF 并重跑文本提取，重试一个永远不会成功的请求纯属浪费。
 _RETRYABLE_APP_ERROR_CODES = {
     "LLM_REQUEST_FAILED",
+    "LLM_RATE_LIMITED",
+    "LLM_UPSTREAM_ERROR",
     "LLM_INVALID_JSON",
     "LLM_SCHEMA_INVALID",
     "OCR_FAILED",
@@ -139,6 +151,14 @@ async def process_resume_parse_task(payload: dict[str, Any]) -> dict[str, Any]:
     task = ResumeParseTask.model_validate(payload)
     # 把消息携带的 traceId 注入日志上下文，使解析流程内的所有日志自动携带 trace_id
     token = set_trace_id(str(task.traceId))
+    # 埋点业务维度：简历文件 ID 用于按文件归因成本；retryCount 落进 attempt_no，
+    # 让"同一个提示词被重试多次"在看板上可读。简历解析的每次重试都要重新下载
+    # PDF 并重跑文本提取，这个维度正是判断"重试是否值得"的依据。
+    llm_token = set_llm_context(
+        biz_type="resume_file",
+        biz_id=task.resumeFileId,
+        attempt_no=task.retryCount,
+    )
     try:
         log.info(
             "收到简历解析任务 taskId=%s resumeFileId=%s retryCount=%s",
@@ -171,6 +191,7 @@ async def process_resume_parse_task(payload: dict[str, Any]) -> dict[str, Any]:
             )
         )
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)
 
 
@@ -341,17 +362,22 @@ async def _consume_once(settings: Settings) -> None:
 async def run_resume_parse_worker(settings: Settings | None = None) -> None:
     """持续运行解析 worker，RabbitMQ 暂不可用时自动退避重连。"""
     settings = settings or get_settings()
-    while True:
-        try:
-            await _consume_once(settings)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception(
-                "RabbitMQ 连接或消费循环异常，%s 秒后重试",
-                settings.rabbitmq_reconnect_delay_seconds,
-            )
-            await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    try:
+        while True:
+            try:
+                await _consume_once(settings)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "RabbitMQ 连接或消费循环异常，%s 秒后重试",
+                    settings.rabbitmq_reconnect_delay_seconds,
+                )
+                await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    finally:
+        # 退出前关闭进程级共享 HTTP 客户端；必须在事件循环内部完成，
+        # 因为 AsyncClient 绑定创建它的事件循环，跨循环关闭会报错。
+        await close_shared_clients()
 
 
 def main() -> None:

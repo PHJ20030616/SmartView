@@ -125,6 +125,73 @@ class LlmCallLogQueryServiceTest {
     }
 
     @Test
+    void mapsBusinessAndDiagnosticDimensions() {
+        // 这些字段是看板回答"哪个会话最贵""为什么失败"的唯一依据；
+        // 漏映射时接口不会报错，只是页面永远显示空，因此必须显式断言。
+        LlmCallLog log = LlmCallLog.builder()
+                .id(99L)
+                .scene("report_generate")
+                .model("deepseek-flash")
+                .bizType("interview_session")
+                .bizId(14L)
+                .promptKey("report_generate.reference_answer")
+                .status("FAILED")
+                .errorCode("LLM_OUTPUT_TRUNCATED")
+                .errorMessage("模型输出达到上限被截断")
+                .latencyMs(41000)
+                .tokenOutput(8192)
+                .maxTokens(8192)
+                .retryAttempt(1)
+                .attemptNo(2)
+                .httpStatus(200)
+                .finishReason("length")
+                .createdAt(LocalDateTime.of(2026, 9, 12, 10, 0))
+                .build();
+        Page<LlmCallLog> page = new Page<>(1, 20);
+        page.setRecords(List.of(log));
+        page.setTotal(1L);
+        when(llmCallLogMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(llmCallLogMapper.selectStats(any(), any(), any(), any())).thenReturn(null);
+
+        LlmCallSummary item = service.listCalls(null, null, null, null, 1, 20).getItems().get(0);
+
+        assertThat(item.getBizType()).isEqualTo("interview_session");
+        assertThat(item.getBizId()).isEqualTo(14L);
+        assertThat(item.getPromptKey()).isEqualTo("report_generate.reference_answer");
+        assertThat(item.getErrorMessage()).isEqualTo("模型输出达到上限被截断");
+        assertThat(item.getHttpStatus()).isEqualTo(200);
+        assertThat(item.getFinishReason()).isEqualTo("length");
+        assertThat(item.getMaxTokens()).isEqualTo(8192);
+        // 两个重试维度必须分开映射：任务第 2 轮 + 提示词修复第 1 次
+        assertThat(item.getAttemptNo()).isEqualTo(2);
+        assertThat(item.getRetryAttempt()).isEqualTo(1);
+    }
+
+    @Test
+    void attemptNoFallsBackToZeroForLegacyRows() {
+        // V11 迁移前的历史行 attempt_no 为 NULL（实体映射为 null），
+        // 契约把 attemptNo 声明为必填非空，因此必须兜底为 0 而不是返回 null。
+        LlmCallLog legacy = LlmCallLog.builder()
+                .id(100L)
+                .scene("evaluate")
+                .model("deepseek-flash")
+                .status("SUCCESS")
+                .latencyMs(10)
+                .attemptNo(null)
+                .createdAt(LocalDateTime.of(2026, 9, 1, 10, 0))
+                .build();
+        Page<LlmCallLog> page = new Page<>(1, 20);
+        page.setRecords(List.of(legacy));
+        page.setTotal(1L);
+        when(llmCallLogMapper.selectPage(any(Page.class), any())).thenReturn(page);
+        when(llmCallLogMapper.selectStats(any(), any(), any(), any())).thenReturn(null);
+
+        LlmCallSummary item = service.listCalls(null, null, null, null, 1, 20).getItems().get(0);
+
+        assertThat(item.getAttemptNo()).isZero();
+    }
+
+    @Test
     void appliesFiltersAndStableOrderingToQuery() {
         Page<LlmCallLog> empty = new Page<>(1, 20);
         empty.setRecords(List.of());

@@ -4,6 +4,7 @@ SmartView AI 服务应用入口
 基于 FastAPI 构建的 AI 服务，为 Spring Boot 后端提供 AI 能力。
 只对 Spring Boot 后端暴露 API，不直接对外提供服务。
 """
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
@@ -14,6 +15,7 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.trace import register_trace_middleware
+from app.services.deepseek_client import close_shared_clients
 
 
 def _normalize_openapi_3_0(value: Any) -> Any:
@@ -82,6 +84,20 @@ def _inject_trace_id_response_headers(schema: dict[str, Any]) -> None:
     )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期钩子：退出时释放进程级共享资源。
+
+    共享 HTTP 客户端持有 keep-alive 连接池，进程退出前不主动关闭会让上游
+    保留半开连接直到其超时；批量重启/滚动发布时容易触碰到网关的连接数上限。
+    这里只做资源回收，不影响请求处理逻辑。
+    """
+    try:
+        yield
+    finally:
+        await close_shared_clients()
+
+
 def create_app() -> FastAPI:
     """
     创建并配置 FastAPI 应用实例
@@ -105,6 +121,7 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
+        lifespan=lifespan,
     )
     # 项目契约和 Spring Boot 代码生成链以 OpenAPI 3.0 为兼容基线。
     app.openapi_version = "3.0.3"

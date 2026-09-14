@@ -22,9 +22,11 @@ from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
+from app.core.llm_context import reset_llm_context, set_llm_context
 from app.core.logging import configure_logging
 from app.core.trace import reset_trace_id, resolve_trace_id, set_trace_id
 from app.schemas.profile import ProfileAnalyzeResult, ProfileAnalyzeTask
+from app.services.deepseek_client import close_shared_clients
 from app.services.profile_analyzer import analyze_profile
 
 log = logging.getLogger(__name__)
@@ -35,8 +37,12 @@ PublishPayload = Callable[[dict[str, Any]], Awaitable[None]]
 # 未确认或版本过期属于确定性业务错误，继续重试不会改变结果。
 # LLM_SCHEMA_INVALID 已经在 analyzer 内部做过一次带上下文的修复，仍失败即视为终态，
 # 避免 MQ 重试再重复 2 次 LLM 调用。
+# 429 与 5xx 归入可重试：它们是上游瞬时状态，退避后重发有意义；
+# 其余 4xx（LLM_REQUEST_REJECTED）是请求被拒，重发不会改变结果。
 _RETRYABLE_APP_ERROR_CODES = {
     "LLM_REQUEST_FAILED",
+    "LLM_RATE_LIMITED",
+    "LLM_UPSTREAM_ERROR",
     "LLM_INVALID_JSON",
 }
 
@@ -145,9 +151,16 @@ async def process_profile_analyze_task(
     task = ProfileAnalyzeTask.model_validate(payload)
     # 把消息携带的 traceId 注入日志上下文，使分析流程内的所有日志自动携带 trace_id
     token = set_trace_id(str(task.traceId))
+    # 埋点业务维度：简历画像 ID 用于按画像归因成本；retryCount 落进 attempt_no。
+    llm_token = set_llm_context(
+        biz_type="resume_profile",
+        biz_id=task.resumeProfileId,
+        attempt_no=task.retryCount,
+    )
     try:
         return await _execute_analyze_task(task, settings)
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)
 
 
@@ -397,17 +410,22 @@ async def _consume_once(settings: Settings) -> None:
 async def run_profile_analyze_worker(settings: Settings | None = None) -> None:
     """持续运行画像分析 worker，RabbitMQ 暂不可用时自动退避重连。"""
     settings = settings or get_settings()
-    while True:
-        try:
-            await _consume_once(settings)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception(
-                "RabbitMQ 连接或画像分析消费循环异常，%s 秒后重试",
-                settings.rabbitmq_reconnect_delay_seconds,
-            )
-            await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    try:
+        while True:
+            try:
+                await _consume_once(settings)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "RabbitMQ 连接或画像分析消费循环异常，%s 秒后重试",
+                    settings.rabbitmq_reconnect_delay_seconds,
+                )
+                await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    finally:
+        # 退出前关闭进程级共享 HTTP 客户端；必须在事件循环内部完成，
+        # 因为 AsyncClient 绑定创建它的事件循环，跨循环关闭会报错。
+        await close_shared_clients()
 
 
 def main() -> None:

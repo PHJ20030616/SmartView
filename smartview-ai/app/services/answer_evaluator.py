@@ -56,7 +56,13 @@ async def evaluate_answer(
             "questionText": question_text,
         }
     messages = _build_messages(question_text, answer_text, expected_points, role_direction)
-    payload = await call_deepseek_json(messages, settings, scene="evaluate", what="回答评估")
+    payload = await call_deepseek_json(
+        messages,
+        settings,
+        scene="evaluate",
+        what="回答评估",
+        prompt_key="evaluate.answer",
+    )
     facts = _normalize(payload, expected_points)
     facts["answerText"] = answer_text
     facts["questionText"] = question_text

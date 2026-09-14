@@ -1,5 +1,6 @@
 package com.smartview.cleanup;
 
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.RabbitMQConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,15 @@ public class CleanupResultConsumer {
      */
     @RabbitListener(queues = RabbitMQConfig.QUEUE_CLEANUP_RESULT)
     public void handleCleanupResult(@Payload CleanupResultMessage message) {
+        // 监听线程长期存活：按消息建立 traceId 作用域，处理完自动恢复，
+        // 避免首个消息的 traceId 被同线程后续消息继承。
+        try (TraceIdContext.Scope ignored =
+                     TraceIdContext.scope(message == null ? null : message.getTraceId())) {
+            doHandleCleanupResult(message);
+        }
+    }
+
+    private void doHandleCleanupResult(CleanupResultMessage message) {
         try {
             log.info("收到清理任务结果，taskId={}, bizId={}, success={}",
                     message == null ? null : message.getTaskId(),

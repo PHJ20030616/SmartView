@@ -54,6 +54,15 @@ class LlmCallRecord:
     token_input: int | None = None
     token_output: int | None = None
     token_total: int | None = None
+    # 网关返回的 HTTP 状态码：传输层成功（200）但内容不合法的失败必须与
+    # 400/429/5xx 区分开——前者要修提示词或抬上限，后者要退避重试。
+    http_status: int | None = None
+    # 模型给出的停止原因（stop / length / content_filter）：length 表示输出被
+    # max_tokens 截断，是"JSON 格式无效"这一类失败里最常见的真实原因。
+    finish_reason: str | None = None
+    # 本次业务任务的第几次尝试（MQ 的 retryCount）。同一 request_hash 的多条记录
+    # 靠它区分"重试"与"重复调用"，否则看板只能看到一堆相同请求。
+    attempt_no: int = 0
     error_code: str | None = None
     error_message: str | None = None
 
@@ -90,12 +99,14 @@ _INSERT_SQL = text(
         trace_id, scene, biz_type, biz_id, provider, model,
         prompt_key, prompt_version, request_hash, request_chars,
         temperature, max_tokens, token_input, token_output, token_total,
-        latency_ms, status, error_code, error_message, retry_attempt
+        latency_ms, status, error_code, error_message, retry_attempt,
+        http_status, finish_reason, attempt_no
     ) VALUES (
         :trace_id, :scene, :biz_type, :biz_id, :provider, :model,
         :prompt_key, :prompt_version, :request_hash, :request_chars,
         :temperature, :max_tokens, :token_input, :token_output, :token_total,
-        :latency_ms, :status, :error_code, :error_message, :retry_attempt
+        :latency_ms, :status, :error_code, :error_message, :retry_attempt,
+        :http_status, :finish_reason, :attempt_no
     )
     """
 )
@@ -151,6 +162,9 @@ def _insert(record: LlmCallRecord, settings: Settings, engine: Engine | Any | No
         "error_code": record.error_code,
         "error_message": record.error_message[:500] if record.error_message else None,
         "retry_attempt": record.retry_attempt,
+        "http_status": record.http_status,
+        "finish_reason": record.finish_reason,
+        "attempt_no": record.attempt_no,
     }
     with _resolve_engine(settings, engine).begin() as connection:
         connection.execute(_INSERT_SQL, params)

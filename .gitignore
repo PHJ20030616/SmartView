@@ -117,3 +117,14 @@ verify_task_*.sh
 # 开发计划
 develop_plan/
 knowledge/
+
+# 评估数据：真实简历样本含 PII，必须排除；合成与边界样本不在此列，
+# 需纳入版本管理，使评估集版本能与代码一起被追踪（见 develop_plan/plan_1.1.md D2/D14）。
+eval-data/**/real/
+eval-data/reports/
+eval-data/chroma/
+
+# 个人求职材料：由 /project-guide 生成为本地文件，含个人经历与面试题库，
+# 不属于项目代码，且仓库可能公开，因此始终排除，仅保留在本地。
+导学-*.md
+面经-*.md

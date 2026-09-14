@@ -2,6 +2,7 @@ package com.smartview.task.scheduler;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.BizType;
 import com.smartview.common.enums.ConfirmStatus;
 import com.smartview.common.enums.TaskStatus;
@@ -60,15 +61,20 @@ public class ResumeVectorRetryScheduler {
         int sentCount = 0;
         int failedCount = 0;
         for (AiTask task : tasks) {
-            try {
-                if (retryTask(task, staleCutoff)) {
-                    sentCount++;
-                } else {
+            // 每个任务按自己的 traceId 建立作用域：调度线程长期存活，逐任务切换才能让
+            // 重投出的消息与日志对应到具体任务，而不是整轮共用一个残留 ID。
+            try (TraceIdContext.Scope ignored =
+                         TraceIdContext.scope(TraceIdContext.resolveTraceId(task.getTraceId()))) {
+                try {
+                    if (retryTask(task, staleCutoff)) {
+                        sentCount++;
+                    } else {
+                        failedCount++;
+                    }
+                } catch (Exception exception) {
                     failedCount++;
+                    log.error("向量任务补偿异常，taskId={}", task.getTaskId(), exception);
                 }
-            } catch (Exception exception) {
-                failedCount++;
-                log.error("向量任务补偿异常，taskId={}", task.getTaskId(), exception);
             }
         }
         log.info("简历向量任务补偿完成，总数={}, 已投递={}, 未处理={}",

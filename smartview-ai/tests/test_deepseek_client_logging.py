@@ -46,9 +46,17 @@ class _CapturingClient:
         # 记录最后一次请求体与请求头，用于断言输出上限、客户端身份等参数确实发给了上游
         self.last_json: dict | None = None
         self.last_headers: dict | None = None
+        # 构造参数：共享客户端把 User-Agent 等不变头放在客户端级默认头里，只在构造时传一次
+        self.init_kwargs: dict | None = None
 
     def __call__(self, *args, **kwargs):  # noqa: ANN002, ANN003 - 对齐 AsyncClient 构造签名
+        self.init_kwargs = kwargs
         return self
+
+    @property
+    def init_headers(self) -> dict:
+        """构造时传入的默认头；未传入时返回空 dict，便于断言直接取值。"""
+        return (self.init_kwargs or {}).get("headers") or {}
 
     async def __aenter__(self):
         return self
@@ -68,6 +76,10 @@ class _CapturingClient:
 def _install_client(monkeypatch, response: httpx.Response | Exception) -> _CapturingClient:
     client = _CapturingClient(response)
     monkeypatch.setattr(deepseek_client.httpx, "AsyncClient", client)
+    # 共享客户端是按 (base_url, timeout) 缓存的进程级单例：不清空的话，
+    # 上一个测试安装的替身会被复用，断言就会打到别的响应上。
+    # 真正的"进程内复用"行为由 test_shared_client_is_reused_across_calls 覆盖。
+    deepseek_client.reset_shared_clients()
     return client
 
 
@@ -250,6 +262,253 @@ def test_repair_call_keeps_same_hash_and_marks_retry(monkeypatch) -> None:
     assert records[0].request_hash == records[1].request_hash
 
 
+def _completion_with_finish(content: str, finish_reason: str, usage: dict | None = None) -> dict:
+    """构造带 finish_reason 的响应体：截断诊断完全依赖这个字段。"""
+    choice = {"message": {"content": content}, "finish_reason": finish_reason}
+    body: dict = {"choices": [choice]}
+    if usage is not None:
+        body["usage"] = usage
+    return body
+
+
+def test_truncated_output_gets_dedicated_error_code(monkeypatch) -> None:
+    """finish_reason=length + JSON 解析失败 → LLM_OUTPUT_TRUNCATED。
+
+    历史上这类失败与"模型乱输出"共用 LLM_INVALID_JSON，看板无法区分
+    "该抬输出上限"还是"该改提示词"，只能靠 token_output 是否贴近 max_tokens 去猜。
+    """
+    records = _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        _json_response(
+            _completion_with_finish(
+                '{"referenceAnswers": [{"questionId": "1", "referenceContent": "被截断',
+                "length",
+                {"prompt_tokens": 14219, "completion_tokens": 8192, "total_tokens": 22411},
+            )
+        ),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="report_generate", what="参考答案"
+            )
+        )
+
+    assert excinfo.value.code == "LLM_OUTPUT_TRUNCATED"
+    assert len(records) == 1
+    # 截断诊断的两个关键证据必须落库：停止原因与实际输出量
+    assert records[0].finish_reason == "length"
+    assert records[0].token_output == 8192
+    assert records[0].status == "FAILED"
+    assert records[0].error_code == "LLM_OUTPUT_TRUNCATED"
+
+
+def test_normal_finish_reason_keeps_invalid_json_code(monkeypatch) -> None:
+    """finish_reason=stop 的非法 JSON 仍然报 LLM_INVALID_JSON，不能被截断逻辑吞掉。"""
+    records = _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        _json_response(_completion_with_finish("这不是 JSON", "stop")),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="evaluate", what="回答评估"
+            )
+        )
+
+    assert excinfo.value.code == "LLM_INVALID_JSON"
+    assert records[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code", "expected_retryable"),
+    [
+        # 429/5xx 是上游瞬时状态，退避重试有意义
+        (429, "LLM_RATE_LIMITED", True),
+        (500, "LLM_UPSTREAM_ERROR", True),
+        (503, "LLM_UPSTREAM_ERROR", True),
+        # 其余 4xx 是请求本身被拒，原样重发永远得到同样的结果
+        (400, "LLM_REQUEST_REJECTED", False),
+        (404, "LLM_REQUEST_REJECTED", False),
+        # 3xx：httpx 默认不跟随重定向，网关换地址/证书跳转都会走到这里。
+        # 属环境问题而非请求问题，必须归入可重试，且不能宣称"请检查模型配置"。
+        (302, "LLM_UPSTREAM_ERROR", True),
+    ],
+)
+def test_http_failures_are_classified_by_retryability(
+    monkeypatch, status_code: int, expected_code: str, expected_retryable: bool
+) -> None:
+    """HTTP 非 2xx 必须按"瞬时/确定性"分成可行动的错误码，并记下状态码与响应体。
+
+    生产故障：切到 opencode 网关后 resume_parse 连续 5 次 400（缺 x-opencode-session），
+    但埋点只留下"LLM_REQUEST_FAILED + 服务暂时不可用"，状态码与网关给的失败原因
+    全被 raise_for_status 丢掉，排查完全无从下手。
+    """
+    from app.workers import report_worker
+
+    records = _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.deepseek.test/chat/completions"),
+            json={"error": {"message": "MissingSessionID"}},
+        ),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES,
+                _settings(),
+                scene="resume_parse",
+                what="简历",
+                unavailable_message="简历结构化服务暂时不可用，请稍后重试",
+            )
+        )
+
+    assert excinfo.value.code == expected_code
+    assert records[0].http_status == status_code
+    assert records[0].error_code == expected_code
+    # 分类结论要与 worker 的重试白名单一致，否则"分类"只是好看而已
+    assert (expected_code in report_worker._RETRYABLE_APP_ERROR_CODES) is expected_retryable
+
+
+def test_redirect_response_does_not_fall_through_to_body_parsing(monkeypatch) -> None:
+    """3xx 必须走"上游异常"分支，而不是漏到正文解析。
+
+    此前判据是 http_status >= 400，3xx 会继续去解析重定向页（HTML），
+    最终以"响应体不是 JSON"的形态报 LLM_REQUEST_FAILED——既丢掉了状态码，
+    也把一次网关跳转描述成请求格式问题，看板上无法与真正的坏响应区分。
+    """
+    records = _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        httpx.Response(
+            status_code=302,
+            headers={"location": "https://gateway.test/chat/completions"},
+            text="<html>moved</html>",
+            request=httpx.Request("POST", "https://api.deepseek.test/chat/completions"),
+        ),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="resume_parse", what="简历"
+            )
+        )
+
+    assert excinfo.value.code == "LLM_UPSTREAM_ERROR"
+    # 状态码必须落库，否则运维看不出"上游在重定向"
+    assert records[0].http_status == 302
+    assert records[0].error_code == "LLM_UPSTREAM_ERROR"
+    # 环境问题可重试：用户看到的应该是"稍后重试"，而不是"请联系管理员检查配置"
+    assert "稍后重试" in excinfo.value.message
+
+
+def test_rejected_request_does_not_promise_user_to_retry(monkeypatch) -> None:
+    """确定性 4xx 不能复用"请稍后重试"文案：重试不会好，只会掩盖配置问题。"""
+    _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        httpx.Response(
+            status_code=400,
+            request=httpx.Request("POST", "https://api.deepseek.test/chat/completions"),
+            json={"error": {"message": "missing x-opencode-session"}},
+        ),
+    )
+
+    with pytest.raises(AppError) as excinfo:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES, _settings(), scene="resume_parse", what="简历"
+            )
+        )
+
+    assert "稍后重试" not in excinfo.value.message
+    assert "模型配置" in excinfo.value.message
+
+
+def test_http_failure_logs_status_and_response_body(monkeypatch, caplog) -> None:
+    """非 2xx 的响应体必须进日志——网关把真正的失败原因写在那里。"""
+    _capture_records(monkeypatch)
+    _install_client(
+        monkeypatch,
+        httpx.Response(
+            status_code=400,
+            request=httpx.Request("POST", "https://api.deepseek.test/chat/completions"),
+            json={"error": {"message": "MissingSessionID"}},
+        ),
+    )
+
+    with caplog.at_level("ERROR"):
+        with pytest.raises(AppError):
+            asyncio.run(
+                deepseek_client.call_deepseek_json(
+                    MESSAGES, _settings(), scene="resume_parse", what="简历"
+                )
+            )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "http_status=400" in logged
+    assert "MissingSessionID" in logged
+
+
+def test_shared_client_is_reused_across_calls(monkeypatch) -> None:
+    """进程内复用同一 AsyncClient：每调用新建客户端等于每次重做 DNS+TCP+TLS 握手。"""
+    records = _capture_records(monkeypatch)
+    client = _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
+    deepseek_client.reset_shared_clients()
+
+    async def _run_twice() -> None:
+        await deepseek_client.call_deepseek_json(
+            MESSAGES, _settings(), scene="evaluate", what="回答评估"
+        )
+        await deepseek_client.call_deepseek_json(
+            MESSAGES, _settings(), scene="evaluate", what="回答评估"
+        )
+
+    asyncio.run(_run_twice())
+
+    # 两次调用只应构造一次客户端
+    assert client.calls == 2
+    assert len(deepseek_client._SHARED_CLIENTS) == 1
+    assert len(records) == 2
+
+
+def test_business_context_reaches_the_record(monkeypatch) -> None:
+    """入口设置的业务上下文要落到埋点，biz_type/biz_id 才能在按会话归因时可用。"""
+    from app.core.llm_context import reset_llm_context, set_llm_context
+
+    records = _capture_records(monkeypatch)
+    _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
+    token = set_llm_context(biz_type="interview_session", biz_id=14, attempt_no=2)
+    try:
+        asyncio.run(
+            deepseek_client.call_deepseek_json(
+                MESSAGES,
+                _settings(),
+                scene="report_generate",
+                what="报告评语",
+                prompt_key="report_generate.narrative",
+            )
+        )
+    finally:
+        reset_llm_context(token)
+
+    assert records[0].biz_type == "interview_session"
+    assert records[0].biz_id == 14
+    assert records[0].attempt_no == 2
+    assert records[0].prompt_key == "report_generate.narrative"
+    assert records[0].http_status == 200
+    assert records[0].finish_reason is None
+
+
 def test_non_object_response_body_is_reported_not_raised(monkeypatch) -> None:
     """网关返回 JSON 数组时必须走"调用失败"分支，而不是未处理异常。"""
     records = _capture_records(monkeypatch)
@@ -328,13 +587,18 @@ def test_session_header_carries_trace_id_as_conversation_id(monkeypatch) -> None
 
     assert client.last_headers is not None
     assert client.last_headers["x-opencode-session"] == "11111111-2222-3333-4444-555555555555"
-    # 客户端自报身份，不能是 httpx 的默认 UA
-    assert client.last_headers["User-Agent"] == "smartview-ai/0.1.0"
+    # 客户端自报身份，不能是 httpx 的默认 UA。UA 属于客户端级默认头
+    # （放在构造参数里，避免每次请求重复拼装），因此断言在构造参数上。
+    assert client.init_headers["User-Agent"] == "smartview-ai/0.1.0"
     assert records[0].trace_id == "11111111-2222-3333-4444-555555555555"
 
 
 def test_session_header_falls_back_without_trace_context(monkeypatch) -> None:
-    """无链路上下文（脚本/定时任务）时用兜底会话标识，不能发空头。"""
+    """无链路上下文（脚本/定时任务）时用兜底会话标识，不能发空头。
+
+    兜底值必须是"进程内稳定、跨进程隔离"的：早期实现用固定字符串
+    smartview-ai-offline，等于把所有离线任务的 LLM 调用塞进同一个网关会话。
+    """
     _capture_records(monkeypatch)
     client = _install_client(monkeypatch, _json_response(_completion('{"ok": true}')))
 
@@ -345,7 +609,10 @@ def test_session_header_falls_back_without_trace_context(monkeypatch) -> None:
     )
 
     assert client.last_headers is not None
-    assert client.last_headers["x-opencode-session"] == "smartview-ai-offline"
+    session_id = client.last_headers["x-opencode-session"]
+    assert session_id.startswith("smartview-ai-offline-")
+    # 同一进程内稳定：否则每次调用都会开一个新的网关会话，失去提示词缓存收益
+    assert session_id == deepseek_client._offline_session_id()
 
 
 def test_record_failure_never_breaks_the_call(monkeypatch) -> None:

@@ -105,10 +105,12 @@ public class ResumeProfileService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void handleResult(ResumeParseResultMessage message) {
-        // 注入 traceId 到 MDC，确保日志可追踪
-        TraceIdContext.setTraceId(message.getTraceId());
-
-        try {
+        // 用消息自带的 traceId 建立作用域：MQ 监听线程长期存活，必须"设置或清空 +
+        // 结束前恢复"，否则首个消息写入的 traceId 会被同线程后续消息继承。
+        // 用 Scope 而非 setTraceId/clear 是因为它支持嵌套并恢复上层现场，
+        // 也保证异常路径同样能复原（进入前该线程若已有链路 ID 不会被抹掉）。
+        try (TraceIdContext.Scope ignored =
+                     TraceIdContext.scope(message == null ? null : message.getTraceId())) {
             // 校验消息必需字段
             validateMessage(message);
 
@@ -120,9 +122,6 @@ public class ResumeProfileService {
             } else {
                 processFailureResult(message);
             }
-        } finally {
-            // 清理 MDC，避免线程池复用时的 traceId 污染
-            TraceIdContext.clear();
         }
     }
 

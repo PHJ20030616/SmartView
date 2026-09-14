@@ -888,6 +888,7 @@ components:
         - status
         - latencyMs
         - retryAttempt
+        - attemptNo
         - createdAt
       properties:
         id:
@@ -907,6 +908,17 @@ components:
         model:
           type: string
           description: 模型名称
+        bizType:
+          type: string
+          nullable: true
+          description: >-
+            业务对象类型（如 interview_session=面试会话、resume_file=简历文件、
+            resume_profile=简历画像），弱引用无外键，用于按业务对象归因调用成本
+        bizId:
+          type: integer
+          format: int64
+          nullable: true
+          description: 业务对象 ID，允许悬空（业务数据删除后仍保留历史观测记录）
         promptKey:
           type: string
           nullable: true
@@ -923,6 +935,10 @@ components:
           type: string
           nullable: true
           description: 失败错误码
+        errorMessage:
+          type: string
+          nullable: true
+          description: 失败原因（落库时已截断至 500 字符）
         latencyMs:
           type: integer
           description: 调用耗时（毫秒）
@@ -938,9 +954,33 @@ components:
           type: integer
           nullable: true
           description: 总 token 数
+        maxTokens:
+          type: integer
+          nullable: true
+          description: >-
+            本次请求的输出上限；与 tokenOutput 接近说明输出顶到了上限，
+            是"JSON 被截断"类失败的直接证据
         retryAttempt:
           type: integer
           description: 修复重试序号，0=首次调用
+        attemptNo:
+          type: integer
+          description: >-
+            MQ 任务重试轮次，0=首次处理；与"修复重试序号 retryAttempt"不是同一维度：
+            attemptNo 由任务消息的 retryCount 决定，retryAttempt 由同一次任务内的
+            提示词修复调用序号决定。同步 HTTP 接口发起的调用没有任务重试概念，恒为 0
+        httpStatus:
+          type: integer
+          nullable: true
+          description: >-
+            上游 HTTP 状态码；429 表示限流、5xx 与 3xx 表示上游/环境故障（可重试）、
+            其余 4xx 表示请求被拒（重发同样请求不会成功）
+        finishReason:
+          type: string
+          nullable: true
+          description: >-
+            上游停止原因；length 表示输出被 max_tokens 截断，是排查
+            "JSON 格式无效"这类失败的关键字段
         requestHash:
           type: string
           nullable: true

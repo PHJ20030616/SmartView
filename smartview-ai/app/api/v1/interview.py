@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import require_ai_service_api_key
 from app.core.errors import ErrorResponse
+from app.core.llm_context import reset_llm_context, set_llm_context
 from app.core.trace import reset_trace_id, set_trace_id
 from app.graphs.candidate_pool_graph import CandidatePoolGraph
 from app.graphs.evaluate_answer_graph import EvaluateAnswerGraph
@@ -50,6 +51,15 @@ def _get_evaluate_graph() -> EvaluateAnswerGraph:
     return EvaluateAnswerGraph()
 
 
+def _set_session_context(session_id: str):
+    """把业务上下文（面试会话）写入埋点作用域，返回用于恢复的 token。
+
+    埋点维度取自请求体里已有的 sessionId——llm_call_log.biz_type/biz_id 这两列
+    建表时就留好了，一直没填，导致无法回答"哪个会话的 LLM 调用最贵"。
+    """
+    return set_llm_context(biz_type="interview_session", biz_id=session_id)
+
+
 @router.post(
     "/first-question",
     operation_id="generateFirstQuestion",
@@ -71,11 +81,14 @@ async def generate_first_question(
 
     把请求携带的 traceId 注入日志上下文，使生成流程内日志与响应头 X-Trace-Id
     都能关联到调用方链路；业务失败在图中转为 success=false，此处只需清理上下文。
+    同时注入业务维度（会话），让本链路产生的 LLM 调用可按会话归因成本。
     """
     token = set_trace_id(str(request.traceId))
+    llm_token = _set_session_context(request.sessionId)
     try:
         return await _get_graph().generate(request)
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)
 
 
@@ -101,9 +114,11 @@ async def generate_candidate_pool(
     把请求携带的 traceId 注入日志上下文，使生成流程内日志可关联到调用方链路。
     """
     token = set_trace_id(str(request.traceId))
+    llm_token = _set_session_context(request.sessionId)
     try:
         return await _get_candidate_pool_graph().generate(request)
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)
 
 
@@ -127,7 +142,9 @@ async def evaluate_answer(request: EvaluateAnswerRequest) -> EvaluateAnswerRespo
     最终动作由 Spring StagePolicyEngine 决定。
     """
     token = set_trace_id(str(request.traceId))
+    llm_token = _set_session_context(request.sessionId)
     try:
         return await _get_evaluate_graph().evaluate(request)
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)

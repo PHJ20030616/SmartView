@@ -12,6 +12,7 @@ ReportScorer 作为独立类保留，后续可平移到独立的"得分评测"Ag
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Mapping
@@ -37,12 +38,18 @@ ANSWER_TYPE_BY_STAGE = {
     "SCENARIO": "SCENARIO_FRAMEWORK",
 }
 
-# 参考答案的输出长度随已答题数量线性增长：一次调用要为**全部**已答题生成
-# referenceContent/keyPoints/tradeoffs。沿用全局 8192 时，多题会话的输出会顶到上限
-# 被截断，而截断后的 JSON 必然解析失败——表现就是"模型返回的参考答案 JSON 格式无效"。
-# 上游实测接受更大的 max_tokens（65536 亦可），因此这里单独放宽，
-# 而不是抬高全局上限去迁就这一条长提示词。
-_REFERENCE_ANSWER_MAX_TOKENS = 16384
+# 单题参考答案的输出上限。
+#
+# 历史实现用一次调用为**全部**已答题生成参考答案，输出随题量线性增长，最后必然撞上
+# max_tokens 被截断——而截断后的 JSON 必然解析失败，表现为"模型返回的参考答案 JSON
+# 格式无效"。生产数据可证：同一个提示词被发 8 次、7 次失败，失败耗时 34~41 秒
+# （模型把上限 token 全吐完才被截断）；把上限从 8192 抬到 16384 后输出 15417，
+# 仍占上限 94%，只是把爆点推后一道题而已。
+#
+# 改成每道题一次调用后，单次输出量与题量解耦：4096 对单题是宽松上限
+# （约合 3000 中文字，远超一份参考答案的实际长度），同时把"线性增长撞上限"
+# 这个结构性矛盾从根上消除。
+_REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION = 4096
 
 
 def _is_repairable(exc: Exception) -> bool:
@@ -50,14 +57,20 @@ def _is_repairable(exc: Exception) -> bool:
 
     - ValueError：JSON 合法但字段不满足 schema，补上具体错误说明再问一次通常能修好；
     - AppError(LLM_INVALID_JSON)：模型这次没吐出合法 JSON（长输出被截断是最常见原因），
-      追加修复指令后重发有机会拿到完整输出。
+      追加修复指令后重发有机会拿到完整输出；
+    - AppError(LLM_OUTPUT_TRUNCATED)：输出顶到 max_tokens 被截断。重发同一份提示词与
+      同一个上限只会再次截断，但补上"上次输出被截断，请精简"的修复指令后仍有救，
+      因此也归入可修复；真正的解决方案是缩小单次请求规模（见分批生成）。
 
-    其它 AppError（未配置密钥、请求失败等）重发同一份提示词不会改变结果，
+    其它 AppError（未配置密钥、请求被拒、传输失败等）重发同一份提示词不会改变结果，
     应由 worker 的有界重试处理，这里不做无效修复调用。
     """
     if isinstance(exc, ValueError):
         return True
-    return isinstance(exc, AppError) and exc.code == "LLM_INVALID_JSON"
+    return isinstance(exc, AppError) and exc.code in {
+        "LLM_INVALID_JSON",
+        "LLM_OUTPUT_TRUNCATED",
+    }
 
 
 class ReportScorer:
@@ -158,7 +171,11 @@ class ReportNarrativeGenerator:
         prompt = self._build_prompt(context)
         try:
             raw = await call_deepseek_json(
-                prompt, self.settings, scene="report_generate", what="报告评语"
+                prompt,
+                self.settings,
+                scene="report_generate",
+                what="报告评语",
+                prompt_key="report_generate.narrative",
             )
             return self._validate(raw)
         except (AppError, ValueError) as exc:
@@ -172,6 +189,7 @@ class ReportNarrativeGenerator:
                 scene="report_generate",
                 what="报告评语",
                 repair_error=str(exc),
+                prompt_key="report_generate.narrative",
             )
             try:
                 return self._validate(repaired)
@@ -218,10 +236,14 @@ class ReportNarrativeGenerator:
 
 
 class ReferenceAnswerGenerator:
-    """为每道已回答问题生成参考答案（LLM，一次结构化调用）。
+    """为每道已回答问题生成参考答案（LLM，逐题一次结构化调用，题间并发）。
 
     answerType 按题目阶段确定性映射，LLM 仅产出 referenceContent/keyPoints/tradeoffs，
     保证参考答案类型与题目阶段严格一致。
+
+    逐题生成而不是一次生成全部：前者让单次输出规模与题量解耦（见
+    _REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION 的说明），单题失败只需重试该题，
+    不再把已经生成的其它题的成果一起作废。
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -233,21 +255,77 @@ class ReferenceAnswerGenerator:
         stage_by_question: Mapping[str, str],
     ) -> list[dict[str, Any]]:
         """questions: [{question_id, question_text, topic, stage, expected_points,
-        actual_answer, score, matched_points, missing_points}]。"""
+        actual_answer, score, matched_points, missing_points}]。
+
+        返回顺序与入参 questions 一致（asyncio.gather 保序），便于落库与前端逐题展示。
+        """
         if not questions:
             return []
-        prompt = self._build_prompt(questions)
+        # 题间彼此独立（提示词只用到当前题的信息），因此用信号量限制并发度后一起发出：
+        # 串行 N 题会让报告生成总耗时随题量线性增长，并发后总耗时回落到单题量级。
+        # 并发度取配置值（LLM_MAX_CONCURRENCY），网关限流时调成 1 即退回串行。
+        concurrency = max(1, int(self.settings.llm_max_concurrency))
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _generate_with_limit(question: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                return await self._generate_one(question, stage_by_question)
+
+        results = await asyncio.gather(
+            *(_generate_with_limit(question) for question in questions),
+            return_exceptions=True,
+        )
+
+        # 一张报告要么每道题都有参考答案，要么整体失败（验收标准：
+        # 每道 ANSWERED 题必须有参考答案）。因此先把成功的题收齐，
+        # 再抛出第一个异常——半份参考答案不能让前端展示成"生成完成"。
+        items: list[dict[str, Any]] = []
+        first_error: BaseException | None = None
+        for result in results:
+            if isinstance(result, BaseException):
+                first_error = first_error or result
+                continue
+            items.append(result)
+        if first_error is not None:
+            raise first_error
+
+        # 不变量守卫：逐题生成后每道题各自对应一条结果，理论上不会重复或缺失。
+        # 仍然显式校验一次——它是"落库参考答案与已答题一一对应"的最后一道闸门，
+        # 代价是一次集合比较，收益是失败时立刻暴露而不是把脏数据写进报告。
+        returned_ids = [item["questionId"] for item in items]
+        if len(returned_ids) != len(set(returned_ids)):
+            raise AppError(
+                "AI 生成的参考答案存在重复题目",
+                code="REPORT_REFERENCE_VALIDATION_FAILED",
+            )
+        missing_ids = sorted(set(stage_by_question) - set(returned_ids))
+        if missing_ids:
+            raise AppError(
+                f"AI 生成的参考答案未覆盖全部已答题，缺少: {missing_ids}",
+                code="REPORT_REFERENCE_VALIDATION_FAILED",
+            )
+        return items
+
+    async def _generate_one(
+        self,
+        question: dict[str, Any],
+        stage_by_question: Mapping[str, str],
+    ) -> dict[str, Any]:
+        """生成单题参考答案；可修复的失败补一次带上下文的修复调用。"""
+        prompt = self._build_prompt([question])
+        question_id = str(question["question_id"])
         try:
             raw = await call_deepseek_json(
                 prompt,
                 self.settings,
                 scene="report_generate",
                 what="参考答案",
-                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS,
+                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION,
+                prompt_key="report_generate.reference_answer",
             )
-            items = self._validate(raw, stage_by_question)
+            return self._validate_one(raw, question, stage_by_question)
         except (AppError, ValueError) as exc:
-            # 与报告评语一致：JSON 解析失败与 schema 校验失败都修复一次。
+            # 与报告评语一致：JSON 解析失败（含输出被截断）与 schema 校验失败都修复一次。
             # 修复调用沿用同一份 prompt（request_hash 相同、retry_attempt=1），
             # 因此"修复率"仍可统计。
             if not _is_repairable(exc):
@@ -258,62 +336,58 @@ class ReferenceAnswerGenerator:
                 scene="report_generate",
                 what="参考答案",
                 repair_error=str(exc),
-                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS,
+                max_tokens=_REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION,
+                prompt_key="report_generate.reference_answer",
             )
             try:
-                items = self._validate(repaired, stage_by_question)
+                return self._validate_one(repaired, question, stage_by_question)
             except ValueError as exc2:
                 # 修复调用后仍校验失败 → 抛 AppError 作为确定性终态：Task 10 worker
                 # 按 AppError.code 识别，不再重试（与 ReportNarrativeGenerator 保持一致）。
+                # 带上题目标识：逐题生成后错误信息必须能定位到具体是哪道题。
                 raise AppError(
-                    "AI 生成的参考答案校验失败",
+                    f"AI 生成的参考答案校验失败（题目 {question_id}）",
                     code="REPORT_REFERENCE_VALIDATION_FAILED",
                 ) from exc2
-        return items
 
-    def _validate(
+    def _validate_one(
         self,
         raw: dict[str, Any],
+        question: dict[str, Any],
         stage_by_question: Mapping[str, str],
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
+        """校验单题参考答案输出，并归一化 answerType。
+
+        模型被要求返回 {referenceAnswers: [...]} 结构；这里只接受恰好包含
+        本次请求的那一道题，多返回或返回别的题目一律判为无效——否则并发场景下
+        某次调用的结果会覆盖另一道题的数据。
+        """
         items = raw.get("referenceAnswers")
         if not isinstance(items, list) or not items:
             raise ValueError("参考答案输出缺少 referenceAnswers 数组")
-        result: list[dict[str, Any]] = []
-        for item in items:
-            question_id = str(item.get("questionId") or "").strip()
-            if not question_id:
-                raise ValueError("参考答案缺少 questionId")
-            content = str(item.get("referenceContent") or "").strip()
-            if not content:
-                raise ValueError(f"参考答案缺少 referenceContent: {question_id}")
-            # answerType 以题目阶段为准，确定性覆盖 LLM 返回值，避免类型与题目不符。
-            stage = stage_by_question.get(question_id, "BASIC")
-            answer_type = ANSWER_TYPE_BY_STAGE.get(stage, "BASIC_KEY_POINTS")
-            result.append(
-                {
-                    "questionId": question_id,
-                    "answerType": answer_type,
-                    "referenceContent": content,
-                    "keyPoints": item.get("keyPoints") or [],
-                    "tradeoffs": item.get("tradeoffs") or [],
-                }
-            )
-        # 终态校验：参考答案必须覆盖本会话全部已答题，缺一不可（验收标准
-        # "每道 ANSWERED 题有参考答案"）。同时拒绝重复题与越权/外部 questionId，
-        # 否则 generate 抛 ValueError → 走一次带上下文的修复调用，仍失败则抛
-        # AppError 终态码，保证落库的 reference_answer 与已答题一一对应。
-        returned_ids = [item["questionId"] for item in result]
-        if len(returned_ids) != len(set(returned_ids)):
-            raise ValueError("参考答案存在重复的 questionId")
-        answered_ids = set(stage_by_question.keys())
-        invalid_ids = set(returned_ids) - answered_ids
-        if invalid_ids:
-            raise ValueError(f"参考答案包含非本会话已答题: {sorted(invalid_ids)}")
-        if set(returned_ids) != answered_ids:
-            missing_ids = sorted(answered_ids - set(returned_ids))
-            raise ValueError(f"参考答案未覆盖全部已答题，缺少: {missing_ids}")
-        return result
+        question_id = str(question["question_id"])
+        matched = [
+            item
+            for item in items
+            if isinstance(item, dict) and str(item.get("questionId") or "").strip() == question_id
+        ]
+        if not matched:
+            # 模型返回的 questionId 与请求不一致（改名、漏字段或返回了别题）
+            raise ValueError(f"参考答案缺少本次请求的题目: {question_id}")
+        item = matched[0]
+        content = str(item.get("referenceContent") or "").strip()
+        if not content:
+            raise ValueError(f"参考答案缺少 referenceContent: {question_id}")
+        # answerType 以题目阶段为准，确定性覆盖 LLM 返回值，避免类型与题目不符。
+        stage = stage_by_question.get(question_id, "BASIC")
+        answer_type = ANSWER_TYPE_BY_STAGE.get(stage, "BASIC_KEY_POINTS")
+        return {
+            "questionId": question_id,
+            "answerType": answer_type,
+            "referenceContent": content,
+            "keyPoints": item.get("keyPoints") or [],
+            "tradeoffs": item.get("tradeoffs") or [],
+        }
 
     @staticmethod
     def _build_prompt(questions: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -414,7 +488,7 @@ class ReportGenerator:
             "coverage": ReportCoverage(**scorer.coverage()),
         }
 
-        # ② LLM 定性内容
+        # ② LLM 定性内容的输入上下文（纯数据组装，不调用模型）
         narrative_context = {
             "roleDirection": session.get("role_direction"),
             "profileSummary": profile,
@@ -432,12 +506,19 @@ class ReportGenerator:
                 for r in question_refs
             ],
         }
-        narrative = await ReportNarrativeGenerator(self.settings).generate(narrative_context)
 
-        # ③ LLM 参考答案（一次批量调用）
+        # ③ LLM 参考答案（逐题并发）
+        #
+        # 刻意放在定性评语之前：参考答案是历史上失败率最高的一步（一次为全部已答题
+        # 生成 → 输出被截断 → JSON 解析失败），而它排在评语之后时，评语这次成功的
+        # 调用会随任务的整体重试被一起丢弃。生产数据里 8 次评语调用有 7 次是这样
+        # 白跑的（约 4.5 万输入 token + 125 秒）。让高风险步骤先跑，失败即止损。
         reference_items = await ReferenceAnswerGenerator(self.settings).generate(
             question_refs, stage_by_question
         )
+
+        # ④ LLM 定性评语（在上一步成功后才消耗 token）
+        narrative = await ReportNarrativeGenerator(self.settings).generate(narrative_context)
 
         return ReportGenerateResult(
             reportId=str(report_id),

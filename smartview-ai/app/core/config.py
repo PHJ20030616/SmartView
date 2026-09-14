@@ -228,6 +228,19 @@ class Settings(BaseSettings):
     deepseek_max_tokens: int = Field(default=4096, gt=0)
     deepseek_temperature: float = Field(default=0.1, ge=0, le=2)
     deepseek_max_input_characters: int = Field(default=60_000, gt=0)
+    # 模型提供方标识：写入 llm_call_log.provider，用于区分"官方 API"与"聚合网关"。
+    # 换 base_url 时必须同步调整——历史数据里 provider 写死为 deepseek，导致
+    # api.deepseek.com 与 opencode.ai 两个网关的指标被合并成同一类，无法归因。
+    deepseek_provider: str = Field(default="deepseek", alias="DEEPSEEK_PROVIDER")
+    # LLM 并发上限：候选题、参考答案等彼此独立的调用会并发发出，用信号量约束网关侧的
+    # 瞬时压力。默认 3 是保守值；网关限流时降到 1 即可退回"完全串行"的行为。
+    llm_max_concurrency: int = Field(default=3, ge=1, le=16, alias="LLM_MAX_CONCURRENCY")
+    # HTTP 非 2xx 时日志保留的响应体字符数。网关把失败原因放在响应体里
+    # （例如 400 MissingSessionID），此前被 raise_for_status 抛掉后完全无法定位；
+    # 截断上限是为了避免把整页 HTML 错误页写进日志。
+    llm_error_body_log_chars: int = Field(
+        default=500, ge=0, le=4000, alias="LLM_ERROR_BODY_LOG_CHARS"
+    )
 
     # Qwen 文本向量模型（Embedding）：替换 Chroma 默认的英文 all-MiniLM-L6-v2，
     # 通过 OpenAI 兼容接口调用，中文检索效果更好。文档入库与查询共用同一模型，

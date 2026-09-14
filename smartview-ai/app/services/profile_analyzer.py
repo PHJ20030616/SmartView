@@ -321,6 +321,7 @@ async def _call_deepseek_json(
         what="画像分析",
         repair_error=repair_error,
         unavailable_message="画像分析服务暂时不可用，请稍后重试",
+        prompt_key="profile_analyze.summary",
     )
 
 

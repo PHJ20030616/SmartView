@@ -21,9 +21,11 @@ from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
+from app.core.llm_context import reset_llm_context, set_llm_context
 from app.core.logging import configure_logging
 from app.core.trace import reset_trace_id, resolve_trace_id, set_trace_id
 from app.schemas.report import ReportGenerateResult, ReportGenerateTask
+from app.services.deepseek_client import close_shared_clients
 from app.services.report_generator import ReportGenerator
 
 log = logging.getLogger(__name__)
@@ -33,8 +35,20 @@ PublishPayload = Callable[[dict[str, Any]], Awaitable[None]]
 # 只有 LLM 服务短暂不可用或返回可修复的 JSON 时才重试；会话/报告缺失等确定性
 # 业务错误继续重试不会改变结果。LLM_SCHEMA_INVALID 已在生成器内部做过一次修复，
 # 仍失败即视为终态，避免 MQ 重试再重复调用 LLM。
+#
+# 按失败性质分类（错误码由 deepseek_client 统一给出）：
+# - LLM_REQUEST_FAILED：传输层异常（超时/连接失败），重发有意义；
+# - LLM_RATE_LIMITED / LLM_UPSTREAM_ERROR：429 与 5xx，属上游瞬时状态；
+# - LLM_INVALID_JSON：内容不合法且原因未知，重发有机会成功。
+# 刻意不含 LLM_REQUEST_REJECTED（其余 4xx）：请求本身被拒（模型名错误、缺鉴权头、
+# 会话 ID 非法），原样重发永远得到同样的 400，只会浪费配额与排队时间；
+# 也刻意不含 LLM_OUTPUT_TRUNCATED：生成器在失败时已经追加过"上次输出被截断、
+# 请精简"的修复指令并重发了一次，若仍截断，说明单次请求规模确实超出上限，
+# 再让 MQ 带着同一份提示词重试同样只会截断，应由调用方缩小请求规模解决。
 _RETRYABLE_APP_ERROR_CODES = {
     "LLM_REQUEST_FAILED",
+    "LLM_RATE_LIMITED",
+    "LLM_UPSTREAM_ERROR",
     "LLM_INVALID_JSON",
 }
 
@@ -143,6 +157,13 @@ async def process_report_generate_task(
     task = ReportGenerateTask.model_validate(payload)
     # 把消息携带的 traceId 注入日志上下文，使生成流程内的所有日志自动携带 trace_id
     token = set_trace_id(str(task.traceId))
+    # 埋点业务维度：会话 ID 用于按会话归因成本；retryCount 落进 llm_call_log.attempt_no，
+    # 把"同一个 request_hash 出现多次"从看板上的重复调用还原成可读的重试关系。
+    llm_token = set_llm_context(
+        biz_type="interview_session",
+        biz_id=task.sessionId,
+        attempt_no=task.retryCount,
+    )
     try:
         log.info(
             "收到报告生成任务 taskId=%s sessionId=%s retryCount=%s",
@@ -151,6 +172,7 @@ async def process_report_generate_task(
         content = await ReportGenerator(settings).generate(task.sessionId)
         return _build_success_result(task, content)
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)
 
 
@@ -335,17 +357,22 @@ async def _consume_once(settings: Settings) -> None:
 async def run_report_generate_worker(settings: Settings | None = None) -> None:
     """持续运行报告生成 worker，RabbitMQ 暂不可用时自动退避重连。"""
     settings = settings or get_settings()
-    while True:
-        try:
-            await _consume_once(settings)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception(
-                "RabbitMQ 连接或报告生成消费循环异常，%s 秒后重试",
-                settings.rabbitmq_reconnect_delay_seconds,
-            )
-            await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    try:
+        while True:
+            try:
+                await _consume_once(settings)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "RabbitMQ 连接或报告生成消费循环异常，%s 秒后重试",
+                    settings.rabbitmq_reconnect_delay_seconds,
+                )
+                await asyncio.sleep(settings.rabbitmq_reconnect_delay_seconds)
+    finally:
+        # 退出前关闭进程级共享 HTTP 客户端：放在事件循环内部（而不是 asyncio.run 之后再起一个），
+        # 因为 AsyncClient 绑定创建它的事件循环，跨循环关闭会直接报错。
+        await close_shared_clients()
 
 
 def main() -> None:

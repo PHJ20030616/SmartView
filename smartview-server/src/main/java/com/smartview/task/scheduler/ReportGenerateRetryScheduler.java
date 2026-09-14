@@ -1,6 +1,7 @@
 package com.smartview.task.scheduler;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.BizType;
 import com.smartview.common.enums.TaskStatus;
 import com.smartview.common.enums.TaskType;
@@ -61,17 +62,22 @@ public class ReportGenerateRetryScheduler {
         int recovered = 0;
         int skipped = 0;
         for (AiTask task : tasks) {
-            try {
-                // 以返回值区分实际补偿与跳过：true 计入 recovered，false（租约未命中/会话已
-                // 离开报告阶段）计入 skipped，保证统计与实际重建数一致。
-                if (reportTaskService.compensateReportTask(task)) {
-                    recovered++;
-                } else {
+            // 每个任务按自己的 traceId 建立作用域：调度线程长期存活，逐任务切换才能让
+            // 重投出的消息与日志对应到具体任务，而不是整轮共用一个残留 ID。
+            try (TraceIdContext.Scope ignored =
+                         TraceIdContext.scope(TraceIdContext.resolveTraceId(task.getTraceId()))) {
+                try {
+                    // 以返回值区分实际补偿与跳过：true 计入 recovered，false（租约未命中/会话已
+                    // 离开报告阶段）计入 skipped，保证统计与实际重建数一致。
+                    if (reportTaskService.compensateReportTask(task)) {
+                        recovered++;
+                    } else {
+                        skipped++;
+                    }
+                } catch (Exception exception) {
                     skipped++;
+                    log.error("报告任务补偿异常，taskId={}", task.getTaskId(), exception);
                 }
-            } catch (Exception exception) {
-                skipped++;
-                log.error("报告任务补偿异常，taskId={}", task.getTaskId(), exception);
             }
         }
         log.info("报告任务补偿扫描完成，可恢复={}, 已补偿={}, 异常跳过={}",

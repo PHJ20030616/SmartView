@@ -42,7 +42,7 @@ public class LlmCallLog {
     /** 调用场景：question_generate / evaluate / report_generate / profile_analyze / resume_parse */
     private String scene;
 
-    /** 业务对象类型（弱引用，本期不填充） */
+    /** 业务对象类型（如 interview_session / resume_file / resume_profile），弱引用无外键 */
     private String bizType;
 
     /** 业务对象ID（弱引用，无外键约束，允许悬空） */
@@ -54,7 +54,7 @@ public class LlmCallLog {
     /** 模型名称 */
     private String model;
 
-    /** prompt 标识（Phase 14 引入按场景 prompt 文件后填充） */
+    /** prompt 标识（如 report_generate.reference_answer），用于按提示词归因指标 */
     private String promptKey;
 
     /** prompt 版本，用于把指标变化归因到具体 prompt 迭代 */
@@ -95,6 +95,15 @@ public class LlmCallLog {
 
     /** 修复重试序号：0=首次调用，1=修复调用 */
     private Integer retryAttempt;
+
+    /** 上游 HTTP 状态码；429=限流，5xx=上游故障，其余 4xx=请求被拒 */
+    private Integer httpStatus;
+
+    /** 上游停止原因；length=输出被 max_tokens 截断 */
+    private String finishReason;
+
+    /** MQ 任务重试轮次，0=首次处理（与 retryAttempt 是两个不同维度） */
+    private Integer attemptNo;
 
     /** 记录创建时间 */
     private LocalDateTime createdAt;

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import require_ai_service_api_key
 from app.core.errors import AppError, ErrorResponse
+from app.core.llm_context import reset_llm_context, set_llm_context
 from app.core.trace import reset_trace_id, set_trace_id
 from app.schemas.profile import AnalyzeProfileRequest, AnalyzeProfileResponse
 from app.services.profile_analyzer import analyze_profile_latest
@@ -38,7 +39,11 @@ async def analyze_profile_endpoint(
     """
     # 把契约请求体中的 traceId 注入日志上下文，与 MQ worker 保持一致，
     # 使端点内日志与响应头 X-Trace-Id 都能关联到调用方链路。
+    # 同时注入业务维度（简历画像），让画像分析的 LLM 调用可按画像归因成本。
     token = set_trace_id(str(request.traceId))
+    llm_token = set_llm_context(
+        biz_type="resume_profile", biz_id=request.resumeProfileId
+    )
     try:
         analysis = await analyze_profile_latest(
             resume_profile_id=str(request.resumeProfileId),
@@ -61,4 +66,5 @@ async def analyze_profile_endpoint(
             success=False, errorMessage="画像分析失败，请稍后重试"
         )
     finally:
+        reset_llm_context(llm_token)
         reset_trace_id(token)

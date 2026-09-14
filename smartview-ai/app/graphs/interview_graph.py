@@ -210,6 +210,7 @@ class FirstQuestionGraph:
             scene="question_generate",
             what="首题",
             repair_error=None,
+            prompt_key="question_generate.first_question",
         )
         source_type = self._normalize_source_type(payload.get("sourceType"))
         result = {

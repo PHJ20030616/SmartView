@@ -15,6 +15,7 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
@@ -23,7 +24,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { components } from "../../api/generated/schema";
 import {
+  BIZ_TYPE_LABEL,
+  ERROR_CODE_HINT,
   fetchLlmCalls,
+  FINISH_REASON_LABEL,
+  isRetryableError,
   SCENE_LABEL,
   STATUS_COLOR,
   STATUS_LABEL,
@@ -42,6 +47,43 @@ const SCENE_OPTIONS = [
   { value: "", label: "全部场景" },
   ...Object.entries(SCENE_LABEL).map(([value, label]) => ({ value, label })),
 ];
+
+/** 业务对象的中文展示：类型 + ID，缺 ID 时只显示类型（历史数据可能没有业务维度） */
+function formatBiz(record: LlmCallSummary): string {
+  if (!record.bizType) {
+    return "-";
+  }
+  const label = BIZ_TYPE_LABEL[record.bizType] ?? record.bizType;
+  return record.bizId == null ? label : `${label} #${record.bizId}`;
+}
+
+/**
+ * 渲染一次失败的诊断信息。
+ *
+ * 只显示错误码不够：LLM_INVALID_JSON 背后可能是"输出被截断"，也可能是模型乱答，
+ * 两者的处置方式完全不同。因此把上游状态码与停止原因一并呈现，
+ * 并把"重试是否有用"直接写进标签，避免运维对确定性失败反复重试。
+ */
+function renderFailure(record: LlmCallSummary) {
+  const retryable = isRetryableError(record.errorCode);
+  const hint = record.errorCode ? ERROR_CODE_HINT[record.errorCode] : undefined;
+  const detail = [
+    record.httpStatus == null ? null : `HTTP ${record.httpStatus}`,
+    record.finishReason ? `停止原因：${FINISH_REASON_LABEL[record.finishReason] ?? record.finishReason}` : null,
+    hint,
+  ]
+    .filter(Boolean)
+    .join("；");
+
+  return (
+    <Tooltip title={detail || undefined}>
+      <Tag color={retryable ? "warning" : "error"}>
+        {record.errorCode ?? STATUS_LABEL.FAILED}
+        {retryable ? "（可重试）" : "（需人工处理）"}
+      </Tag>
+    </Tooltip>
+  );
+}
 
 export default function LlmCallLogPage() {
   // 过滤条件与分页状态：任一项变化都通过 load 重新拉取
@@ -136,15 +178,28 @@ export default function LlmCallLogPage() {
       width: 140,
       render: (value: string) => SCENE_LABEL[value] ?? value,
     },
+    {
+      title: "业务对象",
+      key: "biz",
+      width: 170,
+      render: (_, record) => formatBiz(record),
+    },
+    {
+      title: "prompt",
+      dataIndex: "promptKey",
+      key: "promptKey",
+      width: 220,
+      render: (value?: string | null) => value ?? "-",
+    },
     { title: "模型", dataIndex: "model", key: "model", width: 160 },
     {
       title: "结果",
       dataIndex: "status",
       key: "status",
-      width: 90,
+      width: 200,
       render: (value: string, record) =>
         value === "FAILED" ? (
-          <Tag color={STATUS_COLOR.FAILED}>{record.errorCode ?? STATUS_LABEL.FAILED}</Tag>
+          renderFailure(record)
         ) : (
           <Tag color={STATUS_COLOR.SUCCESS}>{STATUS_LABEL[value] ?? value}</Tag>
         ),
@@ -159,18 +214,47 @@ export default function LlmCallLogPage() {
     {
       title: "Token（入/出）",
       key: "tokens",
-      width: 150,
-      render: (_, record) =>
-        record.tokenInput == null && record.tokenOutput == null
-          ? "-"
-          : `${record.tokenInput ?? "-"} / ${record.tokenOutput ?? "-"}`,
+      width: 180,
+      render: (_, record) => {
+        if (record.tokenInput == null && record.tokenOutput == null) {
+          return "-";
+        }
+        const usage = `${record.tokenInput ?? "-"} / ${record.tokenOutput ?? "-"}`;
+        // 输出贴近上限 = 极可能被截断。这是"JSON 格式无效"类失败最常见的根因，
+        // 因此在列表上直接给出百分比，不必再手工比对两个数字。
+        if (record.maxTokens != null && record.tokenOutput != null && record.maxTokens > 0) {
+          const ratio = Math.round((record.tokenOutput / record.maxTokens) * 100);
+          return (
+            <Tooltip title={`输出上限 ${record.maxTokens} token，已用 ${ratio}%`}>
+              <span>
+                {usage}
+                {ratio >= 90 ? <Tag color="warning">接近上限 {ratio}%</Tag> : null}
+              </span>
+            </Tooltip>
+          );
+        }
+        return usage;
+      },
     },
     {
-      title: "修复重试",
-      dataIndex: "retryAttempt",
-      key: "retryAttempt",
-      width: 110,
-      render: (value: number) => (value > 0 ? <Tag color="warning">第 {value} 次</Tag> : "首次"),
+      title: "重试（任务/修复）",
+      key: "attempts",
+      width: 150,
+      render: (_, record) => {
+        // 任务重试轮次与提示词修复序号是两个维度：前者来自 MQ 消息的 retryCount，
+        // 后者表示同一次任务内因校验失败追加的第 N 次提示。合并展示才能还原重试关系。
+        const taskRetry = record.attemptNo ?? 0;
+        const repair = record.retryAttempt ?? 0;
+        if (taskRetry === 0 && repair === 0) {
+          return "首次";
+        }
+        return (
+          <Space size={4}>
+            {taskRetry > 0 ? <Tag color="warning">任务第 {taskRetry} 轮</Tag> : null}
+            {repair > 0 ? <Tag color="processing">修复第 {repair} 次</Tag> : null}
+          </Space>
+        );
+      },
     },
     {
       title: "链路追踪 ID",
@@ -191,7 +275,8 @@ export default function LlmCallLogPage() {
         </Typography.Title>
         <Typography.Paragraph className="page-subtitle">
           查看大模型调用的场景分布、成功率、P95 延迟与 token
-          消耗，用于定位 prompt 迭代与模型波动带来的变化。
+          消耗；失败记录同时给出上游状态码与停止原因，用于区分"限流可重试"与
+          "配置错误需人工处理"，并可按业务对象归因调用成本。
         </Typography.Paragraph>
       </section>
 
@@ -280,7 +365,7 @@ export default function LlmCallLogPage() {
           showTotal: (total) => `共 ${total} 条`,
         }}
         rowKey="id"
-        scroll={{ x: 1200 }}
+        scroll={{ x: 1800 }}
       />
     </div>
   );

@@ -298,6 +298,11 @@ body {
   margin-top: 16px;
 }
 
+/* 提交按钮区固定在卡片底部，不参与拖拽区的空间分配 */
+.upload-footer {
+  flex: 0 0 auto;
+}
+
 .resume-workspace {
   display: grid;
   grid-template-columns: minmax(360px, 0.92fr) minmax(460px, 1.08fr);
@@ -320,8 +325,27 @@ body {
 
 .resume-upload-card .ant-card-body,
 .resume-preview-card .ant-card-body {
+  display: flex;
   height: 100%;
+  flex-direction: column;
   padding: 32px;
+}
+
+/* 卡片内除拖拽区以外的内容（标题说明、已选文件、进度、提交按钮）
+   一律保持自身高度不收缩，剩余空间全部让给拖拽区，避免拖拽区挤压这些内容 */
+.resume-upload-card .upload-footer,
+.resume-upload-card .selected-file,
+.resume-upload-card .progress-block {
+  flex: 0 0 auto;
+}
+
+/* upload-body 自身允许被压缩（min-height: 0 是 flex 子项的收缩前提），
+   内部空间再由拖拽区占满，这样文件信息、进度条变高时也不会把卡片顶破 */
+.resume-upload-card .upload-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
 .panel-kicker {
@@ -344,35 +368,57 @@ body {
   line-height: 1.7;
 }
 
+/* 拖拽区高度改为“随卡片弹性伸缩”：
+   卡片由右栏（结构化解析结果）的内容高度决定，拖拽区只占用卡片内剩余空间。
+   原实现用 min-height: 500px 硬撑，加上卡片上下的标题与按钮后总高超过卡片，
+   拖拽区会溢出到卡片之外（实测溢出 112px），因此这里改为 flex: 1 + 较低的下限高度。 */
+.resume-dropzone.ant-upload-wrapper {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
 .resume-dropzone.ant-upload-wrapper .ant-upload-drag {
-  min-height: 500px;
-  padding: 48px 24px;
+  min-height: 240px;
+  flex: 1 1 auto;
   border: 2px dashed #dfe6ed;
   border-radius: 8px;
   background: #ffffff;
+}
+
+/* 拖拽区内部使用居中布局：拖拽区被拉高时内容保持垂直居中，不会被拉到顶部 */
+.resume-dropzone .ant-upload-btn {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 26px 20px;
 }
 
 .resume-dropzone.ant-upload-wrapper .ant-upload-drag:hover {
   border-color: #0f9f94;
 }
 
+/* 图标与字号随拖拽区收缩同步下调，保持“图标—标题—说明”在拖拽区内的占比协调，
+   并与确认页的 .resume-source-icon（88px / 42px）保持同一视觉尺度 */
 .upload-illustration {
   display: inline-flex;
-  width: 124px;
-  height: 124px;
+  width: 88px;
+  height: 88px;
   align-items: center;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
   border-radius: 50%;
   background: #d7f7f1;
   color: #0f9f94;
-  font-size: 58px;
+  font-size: 42px;
 }
 
 .upload-title {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: #172337;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
 }
 
@@ -380,7 +426,7 @@ body {
   max-width: 310px;
   margin: 0 auto;
   color: #78869a;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.7;
 }
 
@@ -448,9 +494,11 @@ body {
   font-weight: 700;
 }
 
+/* 右栏空态保留“等待简历文件”的留白，但不再强行撑高卡片（原 420px）：
+   卡片高度会等比放大左栏拖拽区，过高的空态会把红框区域一并顶高 */
 .preview-empty {
   display: flex;
-  min-height: 420px;
+  min-height: 360px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -957,8 +1005,13 @@ body {
     min-height: 280px;
   }
 
+  /* 单列布局下卡片高度不再由右栏决定，拖拽区保留下限高度避免过扁 */
   .resume-dropzone.ant-upload-wrapper .ant-upload-drag {
-    min-height: 360px;
+    min-height: 220px;
+  }
+
+  .preview-empty {
+    min-height: 280px;
   }
 
   .preview-grid,

@@ -1,5 +1,6 @@
 package com.smartview.task.mq;
 
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.RabbitMQConfig;
 import com.smartview.resume.service.ResumeProfileService;
@@ -53,6 +54,26 @@ public class ResumeResultConsumer {
      */
     @RabbitListener(queues = RabbitMQConfig.QUEUE_RESUME_PARSE_RESULT)
     public void handleResumeParseResult(@Payload ResumeParseResultMessage message) {
+        /*
+         * 监听线程由 RabbitMQ 容器长期复用，进入前必须先按消息建立追踪作用域：
+         * handleResult 内部虽然也建了作用域，但它在方法内就闭合了，本类 catch 块里的
+         * 失败日志会在线程残留的 MDC 上执行，被挂到别的消息的 traceId 下——
+         * 正是"按链路排查失效"的成因。作用域可嵌套，退出时恢复进入前的值。
+         */
+        try (TraceIdContext.Scope ignored = TraceIdContext.scope(
+                message == null ? null : message.getTraceId())) {
+            doHandleResumeParseResult(message);
+        }
+    }
+
+    /**
+     * 简历解析结果的实际处理逻辑
+     *
+     * 从监听方法中抽出，使追踪作用域能覆盖全部日志与异常路径。
+     *
+     * @param message 解析结果消息
+     */
+    private void doHandleResumeParseResult(ResumeParseResultMessage message) {
         try {
             log.info("收到简历解析结果消息，taskId={}, resumeFileId={}, success={}",
                     message.getTaskId(), message.getResumeFileId(), message.getSuccess());

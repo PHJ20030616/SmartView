@@ -2,6 +2,7 @@ package com.smartview.task.scheduler;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.enums.ParseStatus;
 import com.smartview.common.enums.TaskStatus;
 import com.smartview.common.enums.TaskType;
@@ -112,27 +113,34 @@ public class ResumeParseRetryScheduler {
 
             // 逐个处理失败任务
             for (AiTask task : failedTasks) {
-                try {
-                    boolean success = retryTask(task, stalePendingCutoff);
-                    if (success) {
-                        successCount++;
-                    } else {
-                        // 关联文件已不存在时已被标记为最终失败，避免重复更新并保留原始错误原因。
-                        if (task.getFinishedAt() != null) {
-                            permanentlyFailedCount++;
-                            continue;
-                        }
-                        // 检查是否达到最大重试次数，兼容历史数据中的空值。
-                        if (!hasRetriesRemaining(task)) {
-                            markAsPermanentlyFailed(task);
-                            permanentlyFailedCount++;
+                // 每个任务按自己的 traceId 建立作用域：一轮补偿可能处理上百个任务，
+                // 而调度线程长期存活。若不逐任务切换，重投过程中任何 currentTraceId()
+                // 取到的都是线程上残留的那个 ID，导致整轮任务共用一条链路
+                // （线上 74 个 AI 任务只有 11 个 traceId 即由此产生）。
+                try (TraceIdContext.Scope ignored =
+                             TraceIdContext.scope(TraceIdContext.resolveTraceId(task.getTraceId()))) {
+                    try {
+                        boolean success = retryTask(task, stalePendingCutoff);
+                        if (success) {
+                            successCount++;
                         } else {
-                            failedCount++;
+                            // 关联文件已不存在时已被标记为最终失败，避免重复更新并保留原始错误原因。
+                            if (task.getFinishedAt() != null) {
+                                permanentlyFailedCount++;
+                                continue;
+                            }
+                            // 检查是否达到最大重试次数，兼容历史数据中的空值。
+                            if (!hasRetriesRemaining(task)) {
+                                markAsPermanentlyFailed(task);
+                                permanentlyFailedCount++;
+                            } else {
+                                failedCount++;
+                            }
                         }
+                    } catch (Exception e) {
+                        log.error("重试任务异常，taskId={}", task.getTaskId(), e);
+                        failedCount++;
                     }
-                } catch (Exception e) {
-                    log.error("重试任务异常，taskId={}", task.getTaskId(), e);
-                    failedCount++;
                 }
             }
 

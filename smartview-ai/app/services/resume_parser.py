@@ -559,6 +559,7 @@ async def _call_deepseek(
         what="简历",
         repair_error=repair_error,
         unavailable_message="简历结构化服务暂时不可用，请稍后重试",
+        prompt_key="resume_parse.structure",
     )
 
 

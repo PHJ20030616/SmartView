@@ -1,5 +1,6 @@
 package com.smartview.task.mq;
 
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.RabbitMQConfig;
 import com.smartview.resume.service.ProfileAnalysisTaskService;
@@ -30,6 +31,15 @@ public class ProfileAnalyzeResultConsumer {
      */
     @RabbitListener(queues = RabbitMQConfig.QUEUE_PROFILE_ANALYZE_RESULT)
     public void handleProfileAnalyzeResult(@Payload ProfileAnalyzeResultMessage message) {
+        // 监听线程长期存活：按消息建立 traceId 作用域，处理完自动恢复，
+        // 避免首个消息的 traceId 被同线程后续消息继承。
+        try (TraceIdContext.Scope ignored =
+                     TraceIdContext.scope(message == null ? null : message.getTraceId())) {
+            doHandleProfileAnalyzeResult(message);
+        }
+    }
+
+    private void doHandleProfileAnalyzeResult(ProfileAnalyzeResultMessage message) {
         try {
             log.info("收到画像分析结果，taskId={}, profileId={}, version={}, direction={}, success={}",
                     message.getTaskId(),

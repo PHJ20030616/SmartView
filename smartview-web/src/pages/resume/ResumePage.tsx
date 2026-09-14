@@ -196,88 +196,95 @@ export default function ResumePage() {
             </Space>
           ) : (
             <>
-              <Upload.Dragger
-                className="resume-dropzone"
-                accept="application/pdf"
-                beforeUpload={handleBeforeUpload}
-                disabled={isProcessing}
-                fileList={fileList}
-                maxCount={1}
-                showUploadList={false}
-                onChange={({ fileList: newFileList }) =>
-                  setFileList(newFileList)
-                }
-              >
-                <div className="upload-illustration">
-                  <InboxOutlined aria-hidden="true" />
-                </div>
-                <p className="upload-title">拖拽文件到此处</p>
-                <p className="upload-hint">
-                  支持 PDF 格式，文件大小不超过 10MB
-                </p>
-              </Upload.Dragger>
-
-              {selectedFile && (
-                <div className="selected-file">
-                  <FilePdfOutlined
-                    aria-hidden="true"
-                    className="selected-file-icon"
-                  />
-                  <div className="selected-file-content">
-                    <span className="selected-file-name">
-                      {selectedFile.name}
-                    </span>
-                    <span className="selected-file-meta">
-                      {fileSizeLabel} · PDF 文件
-                    </span>
-                  </div>
-                  <CheckCircleFilled
-                    aria-label="文件已选择"
-                    className="selected-file-icon"
-                  />
-                </div>
-              )}
-
-              {/* 进度数字与请求服务层保持一致，仅将阶段状态换成更清晰的卡片提示。 */}
-              {state.phase === "uploading" && (
-                <div className="progress-block">
-                  <Progress
-                    percent={99}
-                    status="active"
-                    strokeColor="#0f9f94"
-                  />
-                  <Typography.Text type="secondary">
-                    正在上传 {state.fileName}...
-                  </Typography.Text>
-                </div>
-              )}
-
-              {state.phase === "parsing" && (
-                <div className="progress-block">
-                  <Progress
-                    percent={70}
-                    status="active"
-                    strokeColor="#0f9f94"
-                  />
-                  <Typography.Text type="secondary">
-                    正在解析 {state.fileName}，请稍候...
-                  </Typography.Text>
-                </div>
-              )}
-
-              <div className="page-actions">
-                <Button
-                  disabled={fileList.length === 0 || isProcessing}
-                  loading={isProcessing}
-                  onClick={() => void handleSubmit()}
-                  type="primary"
+              {/* 拖拽区与状态提示放在同一容器中：该容器可被压缩，拖拽区内部再按
+                  卡片剩余空间弹性伸缩；「提交解析」按钮单独放在 upload-footer，
+                  由浏览器布局保证它始终贴在卡片底部。 */}
+              <div className="upload-body">
+                <Upload.Dragger
+                  className="resume-dropzone"
+                  accept="application/pdf"
+                  beforeUpload={handleBeforeUpload}
+                  disabled={isProcessing}
+                  fileList={fileList}
+                  maxCount={1}
+                  showUploadList={false}
+                  onChange={({ fileList: newFileList }) =>
+                    setFileList(newFileList)
+                  }
                 >
-                  {state.phase === "uploading"
-                    ? "上传中..."
-                    : state.phase === "parsing"
-                      ? "解析中..."
-                      : "提交解析"}
-                </Button>
+                  <div className="upload-illustration">
+                    <InboxOutlined aria-hidden="true" />
+                  </div>
+                  <p className="upload-title">拖拽文件到此处</p>
+                  <p className="upload-hint">
+                    支持 PDF 格式，文件大小不超过 10MB
+                  </p>
+                </Upload.Dragger>
+
+                {selectedFile && (
+                  <div className="selected-file">
+                    <FilePdfOutlined
+                      aria-hidden="true"
+                      className="selected-file-icon"
+                    />
+                    <div className="selected-file-content">
+                      <span className="selected-file-name">
+                        {selectedFile.name}
+                      </span>
+                      <span className="selected-file-meta">
+                        {fileSizeLabel} · PDF 文件
+                      </span>
+                    </div>
+                    <CheckCircleFilled
+                      aria-label="文件已选择"
+                      className="selected-file-icon"
+                    />
+                  </div>
+                )}
+
+                {/* 进度数字与请求服务层保持一致，仅将阶段状态换成更清晰的卡片提示。 */}
+                {state.phase === "uploading" && (
+                  <div className="progress-block">
+                    <Progress
+                      percent={99}
+                      status="active"
+                      strokeColor="#0f9f94"
+                    />
+                    <Typography.Text type="secondary">
+                      正在上传 {state.fileName}...
+                    </Typography.Text>
+                  </div>
+                )}
+
+                {state.phase === "parsing" && (
+                  <div className="progress-block">
+                    <Progress
+                      percent={70}
+                      status="active"
+                      strokeColor="#0f9f94"
+                    />
+                    <Typography.Text type="secondary">
+                      正在解析 {state.fileName}，请稍候...
+                    </Typography.Text>
+                  </div>
+                )}
+              </div>
+
+              <div className="upload-footer">
+                <div className="page-actions">
+                  <Button
+                    disabled={fileList.length === 0 || isProcessing}
+                    loading={isProcessing}
+                    onClick={() => void handleSubmit()}
+                    type="primary"
+                  >
+                    {state.phase === "uploading"
+                      ? "上传中..."
+                      : state.phase === "parsing"
+                        ? "解析中..."
+                        : "提交解析"}
+                  </Button>
+                </div>
               </div>
             </>
           )}

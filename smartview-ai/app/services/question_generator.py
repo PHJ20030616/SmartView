@@ -33,7 +33,17 @@ async def generate_one(
     """
     messages = _build_messages(state, target)
     payload = await call_deepseek_json(
-        messages, settings, scene="question_generate", what="候选题"
+        messages,
+        settings,
+        scene="question_generate",
+        what="候选题",
+        # 追问与普通候选题的提示词结构不同，用 prompt_key 区分后，
+        # 指标变化才能归因到具体是哪一类生成目标。
+        prompt_key=(
+            "question_generate.follow_up"
+            if target.get("candidateType") == "FOLLOW_UP"
+            else "question_generate.candidate"
+        ),
     )
     return _normalize(state, target, payload)
 

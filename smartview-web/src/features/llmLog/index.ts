@@ -7,4 +7,12 @@
 export { fetchLlmCalls, LlmLogError, toLlmLogError } from "./llmLogService";
 export { listLlmCallsApi } from "./llmLogApi";
 export type { LlmCallQuery } from "./llmLogApi";
-export { SCENE_LABEL, STATUS_COLOR, STATUS_LABEL } from "./llmLogTypes";
+export {
+  BIZ_TYPE_LABEL,
+  ERROR_CODE_HINT,
+  FINISH_REASON_LABEL,
+  isRetryableError,
+  SCENE_LABEL,
+  STATUS_COLOR,
+  STATUS_LABEL,
+} from "./llmLogTypes";

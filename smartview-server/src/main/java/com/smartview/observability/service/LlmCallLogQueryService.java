@@ -81,15 +81,26 @@ public class LlmCallLogQueryService {
         summary.setScene(safeScene(log.getScene()));
         summary.setProvider(log.getProvider());
         summary.setModel(log.getModel());
+        // 业务维度与诊断字段：看板据此回答"哪个会话最贵"与"为什么失败"，
+        // 缺了这些字段时只能看到"LLM_INVALID_JSON"却判断不出是截断还是模型乱答。
+        summary.setBizType(log.getBizType());
+        summary.setBizId(log.getBizId());
         summary.setPromptKey(log.getPromptKey());
         summary.setPromptVersion(log.getPromptVersion());
         summary.setStatus(safeStatus(log.getStatus()));
         summary.setErrorCode(log.getErrorCode());
+        summary.setErrorMessage(log.getErrorMessage());
         summary.setLatencyMs(log.getLatencyMs());
         summary.setTokenInput(log.getTokenInput());
         summary.setTokenOutput(log.getTokenOutput());
         summary.setTokenTotal(log.getTokenTotal());
+        summary.setMaxTokens(log.getMaxTokens());
         summary.setRetryAttempt(log.getRetryAttempt());
+        // attemptNo 在库里是 NOT NULL DEFAULT 0，历史数据（迁移前写入）该列为 0，
+        // 与"首次处理"同义，因此这里可以直接兜底为 0，无需响应缺省。
+        summary.setAttemptNo(log.getAttemptNo() == null ? 0 : log.getAttemptNo());
+        summary.setHttpStatus(log.getHttpStatus());
+        summary.setFinishReason(log.getFinishReason());
         summary.setRequestHash(log.getRequestHash());
         summary.setCreatedAt(toOffsetDateTime(log.getCreatedAt()));
         return summary;

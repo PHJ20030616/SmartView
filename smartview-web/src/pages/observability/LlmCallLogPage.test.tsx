@@ -123,4 +123,88 @@ describe("LLM 调用观测看板", () => {
     expect(screen.getByText("共 2 条")).toBeTruthy();
     expect(screen.queryByText("共 1 条")).toBeNull();
   });
+
+  it("区分可重试失败与需人工处理的失败", async () => {
+    // 429 限流属上游瞬时状态，重试有意义；400 请求被拒重发永远不会成功。
+    // 看板必须把两者分开，否则运维会对确定性失败反复重试。
+    fetchLlmCallsMock.mockResolvedValue(
+      page({
+        items: [
+          {
+            ...page().items[0],
+            id: "1",
+            status: "FAILED",
+            errorCode: "LLM_RATE_LIMITED",
+            httpStatus: 429,
+          },
+          {
+            ...page().items[0],
+            id: "2",
+            status: "FAILED",
+            errorCode: "LLM_REQUEST_REJECTED",
+            httpStatus: 400,
+          },
+        ],
+        total: 2,
+        stats: { ...page().stats, totalCalls: 2, successCalls: 0, successRate: 0 },
+      }),
+    );
+
+    render(<LlmCallLogPage />);
+
+    expect(await screen.findByText(/LLM_RATE_LIMITED/)).toBeTruthy();
+    // 用全角括号匹配标签自身：页面副标题里也有"可重试"字样，加括号后指向唯一
+    expect(screen.getByText(/（可重试）/)).toBeTruthy();
+    expect(screen.getByText(/LLM_REQUEST_REJECTED/)).toBeTruthy();
+    expect(screen.getByText(/（需人工处理）/)).toBeTruthy();
+  });
+
+  it("输出贴近上限时提示可能被截断", async () => {
+    // 输出被 max_tokens 截断是"JSON 格式无效"类失败的头号原因，
+    // 列表上直接给出占比，避免排查时手工比对 tokenOutput 与 maxTokens。
+    fetchLlmCallsMock.mockResolvedValue(
+      page({
+        items: [
+          {
+            ...page().items[0],
+            id: "3",
+            status: "FAILED",
+            errorCode: "LLM_OUTPUT_TRUNCATED",
+            finishReason: "length",
+            tokenOutput: 8092,
+            maxTokens: 8192,
+          },
+        ],
+      }),
+    );
+
+    render(<LlmCallLogPage />);
+
+    expect(await screen.findByText(/接近上限 99%/)).toBeTruthy();
+  });
+
+  it("展示业务对象与任务重试轮次", async () => {
+    fetchLlmCallsMock.mockResolvedValue(
+      page({
+        items: [
+          {
+            ...page().items[0],
+            id: "4",
+            bizType: "interview_session",
+            bizId: 14,
+            promptKey: "report_generate.reference_answer",
+            attemptNo: 2,
+            retryAttempt: 1,
+          },
+        ],
+      }),
+    );
+
+    render(<LlmCallLogPage />);
+
+    expect(await screen.findByText("面试会话 #14")).toBeTruthy();
+    expect(screen.getByText("report_generate.reference_answer")).toBeTruthy();
+    expect(screen.getByText("任务第 2 轮")).toBeTruthy();
+    expect(screen.getByText("修复第 1 次")).toBeTruthy();
+  });
 });

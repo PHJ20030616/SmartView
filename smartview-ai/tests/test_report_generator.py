@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from app.core.config import Settings
 from app.core.errors import AppError
 from app.schemas.report import ReportGenerateResult
 from app.services import report_generator
@@ -119,38 +120,33 @@ def test_answer_type_mapped_by_stage_deterministically(monkeypatch) -> None:
 
 
 def test_reference_answers_missing_question_raises_validation_error() -> None:
-    """多题场景 LLM 缺失 1 题参考答案 → _validate 抛 ValueError（触发修复调用）。
+    """单题场景 LLM 没返回本题 → _validate_one 抛 ValueError（触发修复调用）。
 
-    验收标准"每道 ANSWERED 题有参考答案"：参考答案必须覆盖全部已答题，缺一不可。
-    这里 3 题已答、LLM 只返回 2 题，直接调用 _validate 校验遗漏即抛错。
+    逐题生成后，"覆盖全部已答题"由调用结构保证（每题各发一次请求），
+    因此这里的失败形态变成"返回的 questionId 不是本次请求的题目"。
     """
+    question = {"question_id": "1", "question_text": "Q1", "stage": "BASIC"}
     stage_by = {"1": "BASIC", "2": "PROJECT", "3": "SCENARIO"}
     raw = {
         "referenceAnswers": [
-            {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
             {"questionId": "2", "referenceContent": "内容2", "keyPoints": [], "tradeoffs": []},
         ]
     }
-    with pytest.raises(ValueError, match="未覆盖全部已答题"):
-        ReferenceAnswerGenerator()._validate(raw, stage_by)
+    with pytest.raises(ValueError, match="缺少本次请求的题目"):
+        ReferenceAnswerGenerator()._validate_one(raw, question, stage_by)
 
 
 def test_reference_answers_missing_question_raises_app_error(monkeypatch) -> None:
-    """修复调用后仍缺失 1 题参考答案 → 抛 AppError 终态码（worker 不再重试）。"""
+    """修复调用后仍拿不到本题参考答案 → 抛 AppError 终态码（worker 不再重试）。"""
     questions = [
         {"question_id": "1", "question_text": "Q1", "stage": "BASIC"},
         {"question_id": "2", "question_text": "Q2", "stage": "PROJECT"},
         {"question_id": "3", "question_text": "Q3", "stage": "SCENARIO"},
     ]
     stage_by = {"1": "BASIC", "2": "PROJECT", "3": "SCENARIO"}
-    # 两次调用均返回缺第 3 题参考答案的 payload：首次 _validate 失败触发修复调用，
-    # 修复后仍缺题 → generate 抛 AppError（确定性终态）。
-    incomplete = {
-        "referenceAnswers": [
-            {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
-            {"questionId": "2", "referenceContent": "内容2", "keyPoints": [], "tradeoffs": []},
-        ]
-    }
+    # 两次调用均返回缺字段的 payload：首次 _validate_one 失败触发修复调用，
+    # 修复后仍失败 → generate 抛 AppError（确定性终态）。
+    incomplete = {"referenceAnswers": [{"questionId": "1", "referenceContent": ""}]}
     calls: list[str | None] = []
 
     async def fake_call(messages, settings, *, what="参考答案", repair_error=None, **_kwargs):
@@ -160,10 +156,12 @@ def test_reference_answers_missing_question_raises_app_error(monkeypatch) -> Non
     monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
     with pytest.raises(AppError) as excinfo:
         asyncio.run(ReferenceAnswerGenerator().generate(questions, stage_by))
-    assert len(calls) == 2
-    assert calls[0] is None
-    assert calls[1] is not None
+    # 3 道题各自调用一次，且每个失败点都补了一次修复调用
+    assert len(calls) == 6
+    assert calls.count(None) == 3
     assert excinfo.value.code == "REPORT_REFERENCE_VALIDATION_FAILED"
+    # 错误信息必须能定位到具体题目：逐题生成后这是排查的唯一抓手
+    assert "题目" in excinfo.value.message
 
 
 def test_reference_answers_invalid_json_triggers_repair_call(monkeypatch) -> None:
@@ -171,6 +169,7 @@ def test_reference_answers_invalid_json_triggers_repair_call(monkeypatch) -> Non
 
     修复重试此前只覆盖"JSON 合法但字段不满足 schema"；JSON 解析失败会立刻抛
     LLM_INVALID_JSON，多题会话一旦被截断就再没有第二次机会。
+    输出被截断现在有独立错误码 LLM_OUTPUT_TRUNCATED，同样必须进修复路径。
     """
     questions = [{"question_id": "1", "question_text": "Q1", "stage": "BASIC"}]
     stage_by = {"1": "BASIC"}
@@ -180,8 +179,8 @@ def test_reference_answers_invalid_json_triggers_repair_call(monkeypatch) -> Non
         calls.append({"what": what, "repair_error": repair_error, "max_tokens": kwargs.get("max_tokens")})
         if repair_error is None:
             raise AppError(
-                "模型返回的参考答案 JSON 格式无效",
-                code="LLM_INVALID_JSON",
+                "模型输出的参考答案达到输出上限被截断，未能形成完整 JSON",
+                code="LLM_OUTPUT_TRUNCATED",
                 status_code=502,
             )
         return {
@@ -196,12 +195,14 @@ def test_reference_answers_invalid_json_triggers_repair_call(monkeypatch) -> Non
     assert len(calls) == 2
     assert calls[0]["repair_error"] is None
     # 修复调用必须带上首次错误原文，模型才知道要改什么
-    assert calls[1]["repair_error"] == "模型返回的参考答案 JSON 格式无效"
+    assert "被截断" in calls[1]["repair_error"]
     assert items[0]["referenceContent"] == "内容1"
-    # 两次调用都使用放宽后的输出上限，避免修复调用再次被截断
+    # 两次调用都使用单题上限：逐题生成后单次输出与题量解耦，
+    # 不再需要为"一次生成全部题"放宽到 16384
     assert {call["max_tokens"] for call in calls} == {
-        report_generator._REFERENCE_ANSWER_MAX_TOKENS
+        report_generator._REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION
     }
+    assert report_generator._REFERENCE_ANSWER_MAX_TOKENS_PER_QUESTION < 16384
 
 
 def test_reference_answers_transport_failure_is_not_repaired(monkeypatch) -> None:
@@ -221,33 +222,83 @@ def test_reference_answers_transport_failure_is_not_repaired(monkeypatch) -> Non
     assert excinfo.value.code == "LLM_REQUEST_FAILED"
 
 
-def test_reference_answers_rejects_outside_and_duplicate_question_ids() -> None:
-    """越权/外部 questionId 与重复 questionId 一律抛 ValueError，拒绝污染落库数据。"""
-    stage_by = {"1": "BASIC", "2": "PROJECT"}
+def test_reference_answers_rejects_foreign_and_empty_question_ids() -> None:
+    """返回的 questionId 不是本次请求的题目、或缺少正文，一律抛 ValueError。
 
-    # 越权：返回了本会话之外的 questionId=99
-    with pytest.raises(ValueError, match="非本会话已答题"):
-        ReferenceAnswerGenerator()._validate(
+    逐题生成后，每次调用只请求一道题：模型返回别题（并发场景下会覆盖别人的数据）
+    或缺 referenceContent（前端展示为空）都必须判为无效，交由修复调用重试。
+    """
+    stage_by = {"1": "BASIC", "2": "PROJECT"}
+    question = {"question_id": "1", "question_text": "Q1", "stage": "BASIC"}
+
+    # 返回了本会话之外 / 另一道题的 questionId
+    with pytest.raises(ValueError, match="缺少本次请求的题目"):
+        ReferenceAnswerGenerator()._validate_one(
             {
                 "referenceAnswers": [
-                    {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
                     {"questionId": "99", "referenceContent": "越权内容", "keyPoints": [], "tradeoffs": []},
                 ]
             },
+            question,
             stage_by,
         )
 
-    # 重复：同一题返回两份参考答案
-    with pytest.raises(ValueError, match="重复的 questionId"):
-        ReferenceAnswerGenerator()._validate(
-            {
-                "referenceAnswers": [
-                    {"questionId": "1", "referenceContent": "内容1", "keyPoints": [], "tradeoffs": []},
-                    {"questionId": "1", "referenceContent": "重复内容", "keyPoints": [], "tradeoffs": []},
-                ]
-            },
+    # 命中本题但缺正文
+    with pytest.raises(ValueError, match="缺少 referenceContent"):
+        ReferenceAnswerGenerator()._validate_one(
+            {"referenceAnswers": [{"questionId": "1", "referenceContent": "   "}]},
+            question,
             stage_by,
         )
+
+
+def test_reference_answers_are_generated_per_question_with_bounded_concurrency(monkeypatch) -> None:
+    """每道题各发一次请求（输出量与题量解耦），且并发度受配置约束。
+
+    这是"输出线性增长撞 max_tokens"这一结构性问题的修复断言：
+    3 道题必须产生 3 次调用，而不是历史上的 1 次批量调用。
+    """
+    questions = [
+        {"question_id": str(index), "question_text": f"Q{index}", "stage": "BASIC"}
+        for index in (1, 2, 3)
+    ]
+    stage_by = {str(index): "BASIC" for index in (1, 2, 3)}
+    seen_question_ids: list[str] = []
+    # 记录同时在飞的调用数，验证信号量确实生效（配置为 1 时不允许并发）
+    in_flight = 0
+    max_in_flight = 0
+
+    async def fake_call(messages, settings, *, what="参考答案", **_kwargs):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        # 从提示词里反查本次请求的是哪一道题（提示词是 json.dumps(questions) 形式）
+        for question in questions:
+            if question["question_text"] in messages[1]["content"]:
+                seen_question_ids.append(question["question_id"])
+        await asyncio.sleep(0)
+        in_flight -= 1
+        return {
+            "referenceAnswers": [
+                {
+                    "questionId": question["question_id"],
+                    "referenceContent": f"内容{question['question_id']}",
+                    "keyPoints": [],
+                    "tradeoffs": [],
+                }
+                for question in questions
+                if question["question_text"] in messages[1]["content"]
+            ]
+        }
+
+    monkeypatch.setattr(report_generator, "call_deepseek_json", fake_call)
+    settings = Settings(_env_file=None, deepseek_api_key="sk-test", llm_max_concurrency=1)
+    items = asyncio.run(ReferenceAnswerGenerator(settings).generate(questions, stage_by))
+
+    assert sorted(seen_question_ids) == ["1", "2", "3"]
+    assert max_in_flight == 1
+    # 返回顺序与入参一致，便于逐题落库与前端展示
+    assert [item["questionId"] for item in items] == ["1", "2", "3"]
 
 
 # ==================== ReportNarrativeGenerator ====================

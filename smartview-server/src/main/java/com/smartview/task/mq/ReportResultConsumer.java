@@ -1,5 +1,6 @@
 package com.smartview.task.mq;
 
+import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.config.RabbitMQConfig;
 import com.smartview.report.service.ReportTaskService;
@@ -31,6 +32,15 @@ public class ReportResultConsumer {
      */
     @RabbitListener(queues = RabbitMQConfig.QUEUE_REPORT_GENERATE_RESULT)
     public void handleReportGenerateResult(@Payload ReportGenerateResultMessage message) {
+        // 监听线程长期存活：必须先按消息建立 traceId 作用域再处理，处理完自动恢复。
+        // 否则首个消息写入的 traceId 会被同线程后续所有消息继承，链路关联失效。
+        try (TraceIdContext.Scope ignored =
+                     TraceIdContext.scope(message == null ? null : message.getTraceId())) {
+            doHandleReportGenerateResult(message);
+        }
+    }
+
+    private void doHandleReportGenerateResult(ReportGenerateResultMessage message) {
         try {
             // 与 catch 分支一致的三元判空：handleResult 会以 BusinessException 拒绝
             // null 消息，这里先判空避免日志 NPE 掩盖真实校验错误。
