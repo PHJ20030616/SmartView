@@ -103,7 +103,12 @@ jobs:
           --health-timeout=5s
           --health-retries=12
       minio:
-        image: minio/minio:latest
+        # 镜像源与版本：MinIO 已从 Docker Hub 撤下 minio/minio 仓库（docker pull 报 404），
+        # 官方改在 quay.io 分发。这里固定具体版本而不跟 latest，是为了避免上游标签漂移
+        # 再次让 CI 挂在“拉取镜像”阶段——该阶段失败会让后续步骤全部 skipped，
+        # 表现为“测试一行没跑就失败”，排查成本很高（见 run 34792986268）。
+        # 版本与 smartview-infra/docker-compose.yml 保持一致，保证 CI 与本地同源。
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
         env:
           MINIO_ROOT_USER: smartview
           MINIO_ROOT_PASSWORD: smartview123
