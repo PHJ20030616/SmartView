@@ -6,13 +6,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartview.ai.client.AiEvaluateAnswerRequest;
 import com.smartview.ai.client.AiEvaluateAnswerResponse;
-import com.smartview.ai.client.AiGenerateCandidatePoolRequest;
 import com.smartview.ai.client.AiInterviewClient;
 import com.smartview.common.api.ResponseCode;
 import com.smartview.common.api.TraceIdContext;
 import com.smartview.common.exception.BusinessException;
 import com.smartview.generated.web.model.SubmitAnswerData;
 import com.smartview.generated.web.model.SubmitAnswerRequest;
+import com.smartview.infra.redis.SubmitInFlightLock;
 import com.smartview.interview.dto.InterviewSessionDtoMapper;
 import com.smartview.interview.engine.StagePolicyEngine;
 import com.smartview.interview.entity.AnswerEvaluation;
@@ -38,12 +38,14 @@ import java.util.List;
  * 流程（docs/interview-policy.md 4.x）：
  * ① 幂等查询 request_id → 命中直接返回既有结果，不重复推进；
  * ② 校验会话归属/状态、当前题目一致性；
- * ③ 事务外调用 FastAPI 评估（避免 10s HTTP 占住 DB 连接，幂等+唯一索引兜底竞态）；
- * ④ 追问候选并入 Redis 候选池；
- * ⑤ 读取合并候选池（Redis → 快照 → 同步重生成，降级不丢回答）；
- * ⑥ StagePolicyEngine 确定性决策；
- * ⑦ 单事务落库推进（InterviewAnswerTxService）；
- * ⑧ 事务提交后预热下一题候选池。
+ * ③ 抢占"该题在途提交"互斥锁，挡住超时重按/重复点击带来的重复评估；
+ * ④ 事务外调用 FastAPI 评估（避免 HTTP 占住 DB 连接，幂等+唯一索引兜底竞态）；
+ * ⑤ 追问候选并入 Redis 候选池；
+ * ⑥ 只读候选池（Redis → 5 分钟快照 → 空，零 LLM）并与本次评估的追问候选合并；
+ * ⑦ StagePolicyEngine 确定性决策（空池由引擎出模板化过渡题，不结束面试）；
+ * ⑧ 单事务落库推进（InterviewAnswerTxService）；
+ * ⑨ 释放提交锁；
+ * ⑩ 事务提交后预热下一题候选池（模板化过渡题同样会触发预热，便于下一轮恢复 AI 候选）。
  *
  * 本服务不持有 @Transactional：事务边界在 InterviewAnswerTxService，
  * 保证评估调用发生在事务外。
@@ -55,6 +57,12 @@ import java.util.List;
 @Service
 public class InterviewAnswerService {
 
+    /**
+     * 追问门控得分线，与 StagePolicyEngine 规则5（得分 ≥ 70 且未达追问深度才追问）保持一致。
+     * 用于"得分本可追问、但候选池与评估响应都没给出追问候选"这一退化场景的告警判定。
+     */
+    private static final int FOLLOW_UP_SCORE_THRESHOLD = 70;
+
     private final InterviewSessionMapper sessionMapper;
     private final InterviewQuestionMapper questionMapper;
     private final InterviewAnswerMapper answerMapper;
@@ -65,6 +73,7 @@ public class InterviewAnswerService {
     private final InterviewAnswerTxService answerTxService;
     private final InterviewSessionDtoMapper dtoMapper;
     private final ObjectMapper objectMapper;
+    private final SubmitInFlightLock submitInFlightLock;
 
     public InterviewAnswerService(
             InterviewSessionMapper sessionMapper,
@@ -76,7 +85,8 @@ public class InterviewAnswerService {
             StagePolicyEngine stagePolicyEngine,
             InterviewAnswerTxService answerTxService,
             InterviewSessionDtoMapper dtoMapper,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            SubmitInFlightLock submitInFlightLock) {
         this.sessionMapper = sessionMapper;
         this.questionMapper = questionMapper;
         this.answerMapper = answerMapper;
@@ -87,6 +97,7 @@ public class InterviewAnswerService {
         this.answerTxService = answerTxService;
         this.dtoMapper = dtoMapper;
         this.objectMapper = objectMapper;
+        this.submitInFlightLock = submitInFlightLock;
     }
 
     /**
@@ -124,35 +135,56 @@ public class InterviewAnswerService {
         }
         InterviewQuestion current = requireCurrentQuestion(session, request.getQuestionId());
 
-        // ④ 事务外调用 FastAPI 评估；失败不落库，允许用户重试（policy 5.2）
-        AiEvaluateAnswerResponse eval = aiInterviewClient.evaluateAnswer(
-                buildEvaluateRequest(session, current, request));
-        if (!Boolean.TRUE.equals(eval.getSuccess())) {
-            String reason = eval.getErrorMessage() == null ? "未知错误" : eval.getErrorMessage();
-            throw new BusinessException(ResponseCode.INTERNAL_ERROR, "回答评估失败：" + reason + "，请重试");
+        // ④ 评估前抢占"该题在途提交"互斥锁：前端超时重按或重复点击时会换新的
+        //    request_id，只有按题目加锁才能挡住这类重复评估，避免同一次回答重复消耗 LLM 配额
+        if (!submitInFlightLock.tryAcquire(sessionId, current.getId())) {
+            throw new BusinessException(ResponseCode.CONFLICT,
+                    "该回答正在评估中，请稍候再试", HttpStatus.CONFLICT);
         }
 
-        // ⑤ 追问候选并入 Redis 候选池（同 key 追加 FOLLOW_UP 类型）
-        List<CandidatePoolItem> followUps = filterItems(eval.getFollowUpCandidates());
-        if (!followUps.isEmpty()) {
-            followUpPoolService.mergeFollowUps(session, current.getId(), followUps);
+        SubmitAnswerData result;
+        try {
+            // ⑤ 事务外调用 FastAPI 评估；失败不落库，允许用户重试（policy 5.2）
+            AiEvaluateAnswerResponse eval = aiInterviewClient.evaluateAnswer(
+                    buildEvaluateRequest(session, current, request));
+            if (!Boolean.TRUE.equals(eval.getSuccess())) {
+                String reason = eval.getErrorMessage() == null ? "未知错误" : eval.getErrorMessage();
+                throw new BusinessException(ResponseCode.INTERNAL_ERROR, "回答评估失败：" + reason + "，请重试");
+            }
+
+            // ⑥ 追问候选并入 Redis 候选池（同阶段换题/入口池 key 缺失时跳过，
+            //    不影响本次决策：下面的合并直接使用本次响应里的追问候选）
+            List<CandidatePoolItem> followUps = filterItems(eval.getFollowUpCandidates());
+            if (!followUps.isEmpty()) {
+                followUpPoolService.mergeFollowUps(session, current.getId(), followUps);
+            }
+
+            // ⑦ 只读候选池（零 LLM：Redis → 5 分钟快照 → 空）并合入本次评估的追问候选。
+            //    合并顺序与 policy 3.4 一致：追问候选优先于换题/入口候选。
+            //    注意：提交链路不再有第二条追问来源（旧实现会同步调 FastAPI 重生成追问池），
+            //    因此"合并后仍为空"意味着本次决策只能出模板化过渡题，必须留下可排查的告警
+            List<CandidatePoolItem> pool = withFollowUps(
+                    followUpPoolService.readPool(session, current.getId()), followUps);
+            if (pool.isEmpty() && eval.getScore() != null && eval.getScore() >= FOLLOW_UP_SCORE_THRESHOLD) {
+                log.warn("候选池为空且得分达到追问门控，本次只能出模板化过渡题（追问相关性下降，"
+                        + "请检查 /evaluate 是否返回了追问候选）sessionId={} questionId={} score={}",
+                        sessionId, current.getId(), eval.getScore());
+            }
+
+            // ⑧ 确定性决策（policy 2.4）；候选池为空时由引擎出模板化过渡题，不再结束面试
+            int consecutiveWeak = computeConsecutiveWeak(session.getId(), eval);
+            StagePolicyEngine.Decision decision = stagePolicyEngine.decide(
+                    buildDecisionInput(session, current, eval, pool, consecutiveWeak));
+
+            // ⑨ 单事务落库推进（乐观锁在事务内校验）
+            result = answerTxService.persist(
+                    userId, session, current, request, eval, decision, pool);
+        } finally {
+            // 无论成功失败都释放：失败时用户可立即重试，成功后重试会命中幂等分支返回既有结果
+            submitInFlightLock.release(sessionId, current.getId());
         }
 
-        // ⑥ 读取合并候选池：Redis 命中优先；缺失时按 3.5 重建（快照/同步重生成），
-        //    并携带评估事实以重建追问池，保证回答不因候选池缺失而丢失
-        List<CandidatePoolItem> pool = followUpPoolService.getPool(
-                session, current.getId(), toFacts(session, current, request, eval));
-
-        // ⑦ 确定性决策（policy 2.4）
-        int consecutiveWeak = computeConsecutiveWeak(session.getId(), eval);
-        StagePolicyEngine.Decision decision = stagePolicyEngine.decide(
-                buildDecisionInput(session, current, eval, pool, consecutiveWeak));
-
-        // ⑧ 单事务落库推进（乐观锁在事务内校验）
-        SubmitAnswerData result = answerTxService.persist(
-                userId, session, current, request, eval, decision, pool);
-
-        // ⑨ 事务提交后预热下一题候选池（低延迟路径，@Async 跨 Bean 生效）
+        // ⑩ 事务提交后预热下一题候选池（低延迟路径，@Async 跨 Bean 生效）
         if (result.getNextQuestion() != null) {
             followUpPoolService.preGenerateAsync(sessionId,
                     Long.parseLong(result.getNextQuestion().getId()));
@@ -161,6 +193,31 @@ public class InterviewAnswerService {
     }
 
     // ==================== 私有辅助 ====================
+
+    /**
+     * 把本次评估返回的追问候选并入候选池列表（追问优先，policy 3.4）。
+     *
+     * 去重依据为题面文本：Redis 池里可能已存在同一道追问（例如 key 命中时的历史写入），
+     * 重复插入会让决策候选与决策快照出现冗余条目。
+     */
+    private List<CandidatePoolItem> withFollowUps(List<CandidatePoolItem> pool,
+            List<CandidatePoolItem> followUps) {
+        List<CandidatePoolItem> merged = new ArrayList<>(followUps);
+        for (CandidatePoolItem item : pool) {
+            boolean duplicated = false;
+            for (CandidatePoolItem existing : merged) {
+                if (existing.getQuestionText() != null
+                        && existing.getQuestionText().equals(item.getQuestionText())) {
+                    duplicated = true;
+                    break;
+                }
+            }
+            if (!duplicated) {
+                merged.add(item);
+            }
+        }
+        return merged;
+    }
 
     private void validateRequest(SubmitAnswerRequest request) {
         if (request == null || request.getRequestId() == null
@@ -226,24 +283,6 @@ public class InterviewAnswerService {
         req.setSessionContext(context);
         req.setTraceId(TraceIdContext.currentTraceId());
         return req;
-    }
-
-    /**
-     * 组装候选池生成的评估事实（供 Redis 缺失重建时再生成追问池）。
-     */
-    private AiGenerateCandidatePoolRequest.EvaluationFacts toFacts(
-            InterviewSession session, InterviewQuestion current, SubmitAnswerRequest request,
-            AiEvaluateAnswerResponse eval) {
-        AiGenerateCandidatePoolRequest.EvaluationFacts facts =
-                new AiGenerateCandidatePoolRequest.EvaluationFacts();
-        facts.setScore(eval.getScore());
-        facts.setLevel(eval.getLevel());
-        facts.setMatchedPoints(eval.getMatchedPoints());
-        facts.setMissingPoints(eval.getMissingPoints());
-        facts.setRiskPoints(eval.getRiskPoints());
-        facts.setAnswerText(request.getAnswerText());
-        facts.setQuestionText(current.getQuestionText());
-        return facts;
     }
 
     /**

@@ -181,10 +181,23 @@ export default function InterviewSessionPage() {
     } catch (error) {
       if (!mountedRef.current) return;
       if (isConflictError(error)) {
-        // 题目已被其他窗口提交或会话已推进：以服务端为准对账刷新
+        // 409 有两个来源，必须区别对待：
+        // ① 题目已被其他窗口提交/会话已推进 → 以服务端为准对账刷新；
+        // ② 本次回答的评估仍在进行中（后端按"会话 + 题目"做在途互斥，见 SubmitInFlightLock）
+        //    → 题目没有变化，此时不能清空草稿，否则用户得重打一遍答案
         try {
           const fresh = await restoreSession(session.id);
-          if (mountedRef.current) applySession(fresh);
+          if (!mountedRef.current) return;
+          const sameQuestionStillActive =
+            fresh.status === "IN_PROGRESS" &&
+            fresh.currentQuestion?.id === session.currentQuestion?.id;
+          if (sameQuestionStillActive) {
+            // 这里必须用固定中文文案，不能透传 axios 的 message：
+            // 后端 message 为空时会露出 "Request failed with status code 409" 这类英文
+            setSubmitError("该回答正在评估中，请稍候再试，不要重复提交");
+          } else {
+            applySession(fresh);
+          }
         } catch {
           if (mountedRef.current) {
             setState({ phase: "error", message: "会话状态已变化，刷新失败" });
@@ -396,6 +409,18 @@ export default function InterviewSessionPage() {
         {submitError && (
           <Alert style={{ marginTop: 12 }} message={submitError} showIcon type="error" />
         )}
+        {submitting && (
+          // 评估链路内含多次 LLM 调用（实测均值 17.7s、最坏 37.8s），提交接口超时已放宽到 65s，
+          // 必须明确告知"正在处理、请勿重复提交"，否则用户会以为卡死而反复点击。
+          // 时长上限写到 40 秒：写 30 秒会让等到 35 秒的用户以为出了故障
+          <Alert
+            description="评估通常需要 10~40 秒，完成后会自动展示下一题；请不要重复提交。"
+            message="评估中，请稍候"
+            showIcon
+            style={{ marginTop: 12 }}
+            type="info"
+          />
+        )}
         <Space style={{ marginTop: 16 }}>
           <Button
             disabled={!answerText.trim() || !session.currentQuestion}
@@ -403,7 +428,7 @@ export default function InterviewSessionPage() {
             onClick={() => void handleSubmit()}
             type="primary"
           >
-            提交回答
+            {submitting ? "正在评估回答…" : "提交回答"}
           </Button>
         </Space>
       </Card>

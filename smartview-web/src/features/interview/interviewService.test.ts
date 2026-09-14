@@ -1,3 +1,4 @@
+import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { components } from "../../api/generated/schema";
@@ -104,6 +105,29 @@ describe("面试会话服务", () => {
     const err = toInterviewError(error, "兜底");
     expect(err.status).toBe(409);
     expect(err.message).toBe("会话已推进");
+  });
+
+  it("toInterviewError 把网络超时转成中文提示并提示不要重复提交", () => {
+    // axios 超时原文是英文 "timeout of 65000ms exceeded"，且此刻服务端可能仍在评估，
+    // 直接展示原文会诱导用户立刻重按（白烧一次 LLM 配额），因此必须换成中文提示
+    const error = {
+      isAxiosError: true,
+      code: "ECONNABORTED",
+      message: "timeout of 65000ms exceeded",
+    };
+    const err = toInterviewError(error, "兜底");
+
+    expect(err.status).toBeUndefined();
+    expect(err.message).toContain("不要重复提交");
+    expect(err.message).not.toContain("exceeded");
+  });
+
+  it("toInterviewError 不把主动取消误报为超时", () => {
+    // 组件卸载/切页会主动 abort：axios 抛 CanceledError，靠 axios.isCancel 判定，
+    // 而不是比对 message 文案（那是 axios 内部实现细节，升级后可能变）
+    const error = new axios.CanceledError("canceled");
+
+    expect(toInterviewError(error, "兜底").message).toBe("canceled");
   });
 
   it("isConflictError 识别 409 冲突", () => {

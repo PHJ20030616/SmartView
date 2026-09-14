@@ -1806,7 +1806,20 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
+            /**
+             * @description 冲突。可能来源：
+             *     1. 会话不在 `IN_PROGRESS` 状态；
+             *     2. `questionId` 不是当前题目（已被其他窗口提交或会话已推进）；
+             *     3. 该题回答正在评估中（同一道题的在途提交互斥锁），此时应等待而非重复提交。
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             422: components["responses"]["ValidationError"];
         };
     };

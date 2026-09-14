@@ -18,16 +18,17 @@ import java.util.List;
  *
  * 功能说明：
  * - 封装候选池 JSON 序列化与 TTL 管理；Redis 只做候选池暂存（缓存），
- *   权威状态在 MySQL，Redis 丢失可从快照/同步重生成重建（interview-policy.md 3.5）
+ *   权威状态在 MySQL，Redis 丢失可由 5 分钟内的决策快照重建，再不行就交由
+ *   StagePolicyEngine 出模板化过渡题（interview-policy.md 3.5）
  * - key 由调用方（FollowUpPoolService）按
  *   interview:candidate_pool:{sessionId}:{questionId}:{currentStage} 拼装
  * - TTL 固定 30 分钟（interview-policy.md 3.2）
  *
  * 容错说明：
- * - 序列化/反序列化失败只记日志返回 null，由调用方走重建链路，
- *   不影响主流程（候选池缺失可降级）
+ * - 序列化/反序列化失败只记日志返回 null，由调用方按"缺失"处理，
+ *   不影响主流程（候选池缺失可降级，但不会因缺池而结束面试）
  * - Redis 连接异常（RedisConnectionFailureException 等 DataAccessException）
- *   同样按可降级路径处理（interview-policy.md 3.5）：读取视为缺失走重建，
+ *   同样按可降级路径处理（interview-policy.md 3.5）：读取视为缺失、
  *   写入尽力而为跳过，与 JSON 序列化失败行为保持一致
  *
  * @author SmartView Team
@@ -67,15 +68,16 @@ public class CandidatePoolRedisRepository {
     }
 
     /**
-     * 读取候选池；缺失、JSON 非法或 Redis 连接异常返回 null，由调用方走重建链路。
+     * 读取候选池；缺失、JSON 非法或 Redis 连接异常返回 null，
+     * 由调用方按 3.5 的顺序继续（读快照 → 出模板化过渡题）。
      */
     public List<CandidatePoolItem> read(String key) {
         String json;
         try {
             json = redisTemplate.opsForValue().get(key);
         } catch (DataAccessException exception) {
-            // Redis 连接异常按可降级路径处理（interview-policy.md 3.5）：视为缺失走重建链路
-            log.warn("候选池读取 Redis 失败（连接异常），视为缺失走重建，key={}, error={}", key, exception.getMessage());
+            // Redis 连接异常按可降级路径处理（interview-policy.md 3.5）：视为缓存缺失
+            log.warn("候选池读取 Redis 失败（连接异常），视为缺失，key={}, error={}", key, exception.getMessage());
             return null;
         }
         if (json == null || json.isBlank()) {
@@ -85,7 +87,7 @@ public class CandidatePoolRedisRepository {
             return objectMapper.readValue(json, new TypeReference<List<CandidatePoolItem>>() {
             });
         } catch (JsonProcessingException exception) {
-            log.warn("候选池 JSON 解析失败，视为缺失走重建，key={}, error={}", key, exception.getMessage());
+            log.warn("候选池 JSON 解析失败，视为缺失，key={}, error={}", key, exception.getMessage());
             return null;
         }
     }
@@ -94,13 +96,13 @@ public class CandidatePoolRedisRepository {
      * 把追问候选池并入同一 key：先移除既有 FOLLOW_UP 类型再追加，避免多次回答残留旧追问。
      *
      * 预生成池 key 缺失（异步预生成未完成/过期/Redis 丢失）时不创建"仅追问"池：
-     * 否则会遮蔽缺失的同阶段换题与下一阶段入口候选，且该 key 一旦存在，
-     * getPool 的 3.5 重建链（含按评估事实重生成追问）将不再触发。
+     * 否则会遮蔽缺失的同阶段换题与下一阶段入口候选。此时该题的决策直接使用本次
+     * /evaluate 响应里的追问候选（InterviewAnswerService 在内存中合并），不依赖 Redis。
      */
     public void mergeFollowUps(String key, List<CandidatePoolItem> followUps) {
         List<CandidatePoolItem> existing = read(key);
         if (existing == null) {
-            log.warn("候选池 key 缺失，跳过追问合并，等待重建补齐，key={}", key);
+            log.warn("候选池 key 缺失，跳过追问合并，本次决策直接用评估响应中的追问候选，key={}", key);
             return;
         }
         List<CandidatePoolItem> merged = new ArrayList<>(existing);

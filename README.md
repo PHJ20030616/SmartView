@@ -661,7 +661,7 @@ flowchart TB
 
 ## 本地开发入口
 
-以下命令按「基础设施 → Spring Boot → FastAPI → 前端」的顺序启动；四个服务全部就绪后再访问前端。
+以下命令按「基础设施 → Spring Boot → FastAPI → 异步 Worker → 前端」的顺序启动；全部就绪后再访问前端。
 
 ```bash
 # 启动基础设施
@@ -673,15 +673,29 @@ docker compose up -d
 cd ../smartview-server
 mvn spring-boot:run
 
-# 启动 FastAPI
+# 启动 FastAPI（仅 HTTP 接口）
 cd ../smartview-ai
 uvicorn app.main:app --reload --port 8000
+
+# 启动异步 Worker：简历解析/向量入库/画像分析/报告生成/清理各自独立进程，
+# 每个占一个终端（以下命令均在 smartview-ai 目录下、使用该项目的虚拟环境执行）
+python -m app.workers.resume_worker
+python -m app.workers.resume_vectorize_worker
+python -m app.workers.profile_worker
+python -m app.workers.report_worker
+python -m app.workers.cleanup_worker
 
 # 启动 React 前端
 cd ../smartview-web
 npm install
 npm run dev
 ```
+
+> **只启动 `uvicorn` 是不够的。** Worker 是 RabbitMQ 消费者，与 HTTP 接口是两个进程：
+> 漏启动时接口、页面都正常，但上传简历后会一直停在「解析中/向量入库中」，
+> 且 AI 服务日志里看不到任何任务记录。可在 RabbitMQ 管理台
+> （`RABBITMQ_MANAGEMENT_URL`，默认 http://localhost:15672）的 Queues 页确认
+> `smartview.resume.parse` 等队列的 Consumers 不为 0，或直接看 Worker 终端输出的启动行。
 
 **核心规范文档（必读）：**
 

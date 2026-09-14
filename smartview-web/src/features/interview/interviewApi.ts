@@ -16,6 +16,21 @@ type RoleDirection = components["schemas"]["CreateInterviewSessionRequest"]["rol
 type InterviewSessionPage = components["schemas"]["InterviewSessionPage"];
 
 /**
+ * 提交回答的独立超时（65s）。
+ *
+ * 提交链路内含多次 LLM 调用（回答评估 + 追问候选生成，实测均值 17.7s、最坏 37.8s），
+ * 沿用全局 15s 会让"服务端已落库并推进、前端却报超时"的假失败达到 61%，用户重按还会
+ * 白烧一次 LLM 配额。这里单独放宽，其余接口继续用全局 15s，快速失败不受影响。
+ * （更早的实测里 43.8s 是候选池接口的重建耗时；提交链路已不再同步重建候选池，
+ * 因此当前口径按 37.8s 计。）
+ *
+ * 取值原则是"略大于服务端超时"：Spring 侧 `ai-service.read-timeout-ms` 与生产 Nginx
+ * `proxy_read_timeout` 都是 60s，客户端等 65s 就能拿到服务端返回的中文错误提示
+ * （而不是浏览器先断开、只剩英文的 timeout 文案）。
+ */
+export const SUBMIT_ANSWER_TIMEOUT_MS = 65000;
+
+/**
  * 安全提取响应数据，data 为 null 时抛明确错误。
  * 避免使用非空断言 `!`，防止后端返回 data:null 时前端静默崩溃。
  */
@@ -77,7 +92,8 @@ export async function submitAnswerApi(
   const response = await request.post<ApiResponseWrapper<SubmitAnswerData>>(
     `/interview-sessions/${sessionId}/answers`,
     { questionId, answerText, requestId, durationSeconds },
-    { signal },
+    // 只放宽本接口的超时，见 SUBMIT_ANSWER_TIMEOUT_MS 说明
+    { signal, timeout: SUBMIT_ANSWER_TIMEOUT_MS },
   );
   return extractData(response.data, `/interview-sessions/${sessionId}/answers`);
 }

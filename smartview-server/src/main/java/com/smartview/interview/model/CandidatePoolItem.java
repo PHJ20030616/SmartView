@@ -29,6 +29,15 @@ import java.util.List;
 @AllArgsConstructor
 public class CandidatePoolItem {
 
+    /** 候选类型：同阶段换题（与 ai-api 契约 CandidatePoolItem.candidateType 一致） */
+    public static final String TYPE_SAME_STAGE_SWITCH = "SAME_STAGE_SWITCH";
+
+    /** 候选类型：下一阶段入口 */
+    public static final String TYPE_NEXT_STAGE_ENTRY = "NEXT_STAGE_ENTRY";
+
+    /** 候选类型：追问 */
+    public static final String TYPE_FOLLOW_UP = "FOLLOW_UP";
+
     /** 候选问题正文 */
     private String questionText;
 

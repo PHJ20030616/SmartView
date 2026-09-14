@@ -38,8 +38,8 @@ import static org.mockito.Mockito.when;
  * 覆盖验收标准：
  * 1. 预生成异步：组装 PRE_GENERATED 请求、调用 AI 客户端、写入 Redis；
  *    AI 失败/异常不向上抛出（候选池可降级）
- * 2. getPool：Redis 命中直接返回；缺失走快照重建（5 分钟内）；快照也缺失走
- *    同步重生成；全部失败返回空
+ * 2. readPool：Redis 命中直接返回；缺失走 5 分钟内快照；都缺失返回空，
+ *    **且全程不调用 AI**（提交链路禁止同步重生成，见 plan_1.2 Phase 0）
  * 3. mergeFollowUps：将追问池委托给 Redis 仓库并入
  */
 @ExtendWith(MockitoExtension.class)
@@ -143,16 +143,17 @@ class FollowUpPoolServiceTest {
     }
 
     @Test
-    void getPool_Redis命中直接返回() {
+    void readPool_Redis命中直接返回() {
         List<CandidatePoolItem> pool = List.of(item("SAME_STAGE_SWITCH", "JVM"));
         when(redisRepository.read(KEY)).thenReturn(pool);
 
-        assertThat(service.getPool(session(), 11L)).isEqualTo(pool);
+        assertThat(service.readPool(session(), 11L)).isEqualTo(pool);
         verify(answerEvaluationMapper, never()).selectOne(any());
+        verify(aiInterviewClient, never()).generateCandidatePool(any());
     }
 
     @Test
-    void getPool_Redis缺失且快照新鲜时用快照() {
+    void readPool_Redis缺失且快照新鲜时用快照() {
         when(redisRepository.read(KEY)).thenReturn(null);
 
         AnswerEvaluation evaluation = AnswerEvaluation.builder()
@@ -165,16 +166,19 @@ class FollowUpPoolServiceTest {
                 .build();
         when(answerEvaluationMapper.selectOne(any())).thenReturn(evaluation);
 
-        List<CandidatePoolItem> pool = service.getPool(session(), 11L);
+        List<CandidatePoolItem> pool = service.readPool(session(), 11L);
 
         assertThat(pool).hasSize(1);
         assertThat(pool.get(0).getTopic()).isEqualTo("JVM");
         // 快照命中也写回 Redis，避免下次再查快照
         verify(redisRepository).save(eq(KEY), anyList());
+        verify(aiInterviewClient, never()).generateCandidatePool(any());
     }
 
     @Test
-    void getPool_Redis缺失且快照过期时同步重生成() {
+    void readPool_快照过期时返回空且不触发同步重生成() {
+        // 关键回归：修复前此处会同步调 FastAPI 重生成候选池（单次实测 8.7s × 2~6 次），
+        // 把提交请求拖到 43.8s；现在必须只读取、零 AI 调用，交由决策引擎出模板化过渡题
         when(redisRepository.read(KEY)).thenReturn(null);
 
         AnswerEvaluation evaluation = AnswerEvaluation.builder()
@@ -186,27 +190,19 @@ class FollowUpPoolServiceTest {
                         + "\"stage\":\"BASIC\",\"candidateType\":\"SAME_STAGE_SWITCH\"}]}")
                 .build();
         when(answerEvaluationMapper.selectOne(any())).thenReturn(evaluation);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
-        when(aiInterviewClient.generateCandidatePool(any()))
-                .thenReturn(poolResponse(item("SAME_STAGE_SWITCH", "JVM")));
 
-        List<CandidatePoolItem> pool = service.getPool(session(), 11L);
-
-        assertThat(pool).hasSize(1);
-        assertThat(pool.get(0).getTopic()).isEqualTo("JVM");
-        verify(redisRepository).save(eq(KEY), anyList());
+        assertThat(service.readPool(session(), 11L)).isEmpty();
+        verify(aiInterviewClient, never()).generateCandidatePool(any());
+        verify(redisRepository, never()).save(anyString(), anyList());
     }
 
     @Test
-    void getPool_全链路失败返回空() {
+    void readPool_Redis与快照都缺失时返回空且不调用AI() {
         when(redisRepository.read(KEY)).thenReturn(null);
         when(answerEvaluationMapper.selectOne(any())).thenReturn(null);
-        when(questionMapper.selectList(any())).thenReturn(List.of());
-        when(aiInterviewClient.generateCandidatePool(any()))
-                .thenThrow(new com.smartview.common.exception.BusinessException(
-                        com.smartview.common.api.ResponseCode.INTERNAL_ERROR, "AI 服务暂不可用"));
 
-        assertThat(service.getPool(session(), 11L)).isEmpty();
+        assertThat(service.readPool(session(), 11L)).isEmpty();
+        verify(aiInterviewClient, never()).generateCandidatePool(any());
     }
 
     @Test

@@ -20,6 +20,13 @@ import java.util.List;
  * 决策优先级：规则1 硬性终止 → 规则2 阶段推进(必须) → 规则5 正常流程
  * → 规则4 候选池为空降级 → 规则2 阶段推进(可) → 兜底。
  *
+ * 空池兜底（interview-policy.md 5.3）：候选池是尽力而为的缓存，读不到候选不等于
+ * "面试没有题可问了"。因此规则4/兜底分支不再产出 FINISH(NO_VALID_QUESTION)，改为调用
+ * {@link FallbackQuestionFactory} 生成模板化过渡题继续面试——把兜底方向从
+ * "拿不到候选 → 结束会话"反转为"拿不到候选 → 出一道具名但相关性一般的确定性题"。
+ * 连续兜底时主题与措辞按阶段题量轮转，避免连续出现字面相同的题；总题量上限在阶段计划
+ * 缺失时按 {@link #DEFAULT_TOTAL_MAX_QUESTIONS} 兜底，保证面试不会被兜底题拖成无限长。
+ *
  * @author SmartView Team
  * @since 2026-08-09
  */
@@ -37,17 +44,32 @@ public class StagePolicyEngine {
     public static final String END_QUESTION_LIMIT = "QUESTION_LIMIT";
     public static final String END_QUALITY_TOO_LOW = "QUALITY_TOO_LOW";
     public static final String END_PLAN_COMPLETED = "PLAN_COMPLETED";
+
+    /**
+     * 历史结束原因：候选池耗尽且无可用候选。
+     *
+     * 仅保留用于识别历史会话数据；引擎自 v1.2 起不再产出该值——空池一律改出
+     * 模板化过渡题（见类注释），保证"缓存抖动"不会被误判成"面试正常结束"。
+     */
     public static final String END_NO_VALID_QUESTION = "NO_VALID_QUESTION";
 
-    /** 候选类型常量（与 ai-api 契约 CandidatePoolItem.candidateType 一致） */
-    private static final String CANDIDATE_FOLLOW_UP = "FOLLOW_UP";
-    private static final String CANDIDATE_SWITCH = "SAME_STAGE_SWITCH";
-    private static final String CANDIDATE_ENTRY = "NEXT_STAGE_ENTRY";
+    /**
+     * 候选类型常量：引用 {@link CandidatePoolItem} 上的契约常量，避免同一组字符串
+     * 在引擎与模板工厂里各存一份（契约改名时容易只改一处）。
+     */
+    private static final String CANDIDATE_FOLLOW_UP = CandidatePoolItem.TYPE_FOLLOW_UP;
+    private static final String CANDIDATE_SWITCH = CandidatePoolItem.TYPE_SAME_STAGE_SWITCH;
+    private static final String CANDIDATE_ENTRY = CandidatePoolItem.TYPE_NEXT_STAGE_ENTRY;
+
+    /** 阶段计划缺失或字段缺失时的总题量上限兜底（与 StagePlanBuilder 的计划默认值一致） */
+    private static final int DEFAULT_TOTAL_MAX_QUESTIONS = 20;
 
     private final ObjectMapper objectMapper;
+    private final FallbackQuestionFactory fallbackQuestionFactory;
 
-    public StagePolicyEngine(ObjectMapper objectMapper) {
+    public StagePolicyEngine(ObjectMapper objectMapper, FallbackQuestionFactory fallbackQuestionFactory) {
         this.objectMapper = objectMapper;
+        this.fallbackQuestionFactory = fallbackQuestionFactory;
     }
 
     /**
@@ -102,10 +124,11 @@ public class StagePolicyEngine {
      * 按 policy 2.4 优先级执行确定性决策。
      *
      * 顺序：规则1 硬性终止 → 规则2 全部阶段满足则结束 → 规则2 当前阶段达到 max 必须推进
-     * → 规则3/5 正常流程 → 规则4 空池降级 → 规则2 当前阶段可推进 → 兜底。
+     * → 规则3/5 正常流程 → 规则4 空池降级（含模板化兜底题）→ 规则2 当前阶段可推进 → 兜底。
      *
      * 不变量：非 FINISH 决策必然携带 selectedCandidate，事务层据此落库下一题；
-     * 无法取得候选的推进一律降级为 FINISH(NO_VALID_QUESTION)，避免 500。
+     * 空池不再降级为 FINISH，而是产出模板化过渡题（FallbackQuestionFactory），
+     * 因此"取得不到候选"这一降级路径不会结束面试。
      */
     public Decision decide(DecisionInput in) {
         JsonNode plan = parse(in.getStagePlanJson());
@@ -143,7 +166,11 @@ public class StagePolicyEngine {
                 && effectiveFollowUpCount >= maxFollowUpDepth(currentPlan);
 
         // 规则2：全部阶段满足推进条件且总题量达到最少题量 → 结束（先于单阶段强制推进，
-        // 保证最后一个阶段完成时正确结束而不是产生 NEXT_STAGE(null)）
+        // 保证最后一个阶段完成时正确结束而不是产生 NEXT_STAGE(null)）。
+        // 注意这条判定只看阶段计划与覆盖度，与候选池无关：必覆盖主题已全部覆盖、各阶段
+        // 题量均达 min_questions、总题量达 total_min_questions，就是计划意义上的"面试问完
+        // 了"，此时池里有没有候选都不该继续出题（池非空时同样返回 PLAN_COMPLETED）。
+        // 空池兜底只作用于"还需要继续出题"的路径，不改变计划完成条件。
         if (allStagesSatisfied(plan, coverage, in.getCurrentStage(), currentCount, effectiveCovered)
                 && totalCount >= totalMin(plan)) {
             return finish(END_PLAN_COMPLETED, "全部阶段满足推进条件且总题量达到 " + totalMin(plan) + "，结束面试");
@@ -153,7 +180,7 @@ public class StagePolicyEngine {
             if (!entries.isEmpty()) {
                 return nextStage(nextStage, entries.get(0), "当前阶段题量达到上限 " + maxQuestions(currentPlan));
             }
-            return finish(END_NO_VALID_QUESTION, "当前阶段题量已达上限但无下一阶段入口候选，结束面试");
+            return fallbackForcedAdvance(plan, in, nextStage, currentPlan);
         }
 
         // 规则5：正常流程 —— 高质量且可追问 → 追问；否则同阶段有换题候选 → 换题
@@ -168,12 +195,13 @@ public class StagePolicyEngine {
                     + "，切换同阶段主题");
         }
 
-        // 规则4：追问与换题候选都为空 → 使用入口候选推进；入口也空则结束（候选池耗尽）
+        // 规则4：追问与换题候选都为空 → 使用入口候选推进；入口也空则出模板化过渡题
         if (followUps.isEmpty() && switches.isEmpty()) {
             if (!entries.isEmpty()) {
                 return nextStage(nextStage, entries.get(0), "追问与换题候选为空，使用下一阶段入口候选");
             }
-            return finish(END_NO_VALID_QUESTION, "候选池耗尽（含下一阶段入口），结束面试");
+            return fallbackDecision(plan, in, nextStage, currentPlan, currentCount, effectiveCovered,
+                    "追问、换题与下一阶段入口候选均为空");
         }
 
         // 规则2：当前阶段覆盖充分且达到最少题量 → 可推进（仅当存在入口候选时，
@@ -184,11 +212,82 @@ public class StagePolicyEngine {
         }
 
         // 兜底：仍有追问候选则追问（无换题/入口候选时复用追问保持面试推进），
-        // 否则候选池耗尽结束。此分支保证非 FINISH 决策必带候选（不变量）。
+        // 否则出模板化过渡题继续面试。此分支保证非 FINISH 决策必带候选（不变量）。
         if (!depthLimited && !followUps.isEmpty()) {
             return followUp(followUps.get(0), "无可用换题/入口候选，复用追问候选保持面试推进");
         }
-        return finish(END_NO_VALID_QUESTION, "候选池耗尽且无下一阶段入口，结束面试");
+        return fallbackDecision(plan, in, nextStage, currentPlan, currentCount, effectiveCovered,
+                "候选池无可用候选");
+    }
+
+    // ==================== 空池模板化兜底 ====================
+
+    /**
+     * 规则2"当前阶段达题量上限必须推进"的兜底：候选池里没有下一阶段入口候选。
+     *
+     * 若仍有下一阶段，则用模板化入口题推进——否则整场面试会因为少一道候选而提前结束；
+     * 若已是最后一个阶段，说明各阶段题量均已达上限（例如计划里 total_min_questions
+     * 大于各阶段 max_questions 之和这类不自洽配置），按"计划完成"结束更贴近事实，
+     * 也更便于事后定位计划配置问题。
+     */
+    private Decision fallbackForcedAdvance(JsonNode plan, DecisionInput in, String nextStage,
+            JsonNode currentPlan) {
+        if (nextStage == null) {
+            return finish(END_PLAN_COMPLETED, "当前阶段题量达到上限 " + maxQuestions(currentPlan)
+                    + " 且无下一阶段，按计划完成结束面试");
+        }
+        return nextStage(nextStage,
+                fallbackQuestionFactory.createEntryFallback(nextStage, firstRequiredTopic(plan, nextStage)),
+                "当前阶段题量达到上限 " + maxQuestions(currentPlan) + " 且无入口候选，改用模板化过渡题推进");
+    }
+
+    /**
+     * 候选池无可用候选时的模板化兜底（interview-policy.md 5.3）。
+     *
+     * 选择顺序体现"模板题也要服务阶段计划"的取舍：
+     * ① 当前阶段还有未覆盖的必覆盖主题 → 直接针对该主题出题，避免兜底题破坏覆盖度要求；
+     * ② 当前阶段已满足推进条件（题量达 max，或必覆盖主题齐备且达到最少题量）→ 出下一阶段入口题；
+     * ③ 其余情况 → 在必覆盖主题间轮转、措辞按下标轮转，追加一道模板题避免面试中断
+     *    （题量上限仍由规则1约束；轮转是为了避免连续兜底时反复问同一道题）。
+     *
+     * @param currentCount     本题提交后的阶段有效题量，同时作为主题/措辞的轮转下标
+     * @param effectiveCovered 本题提交后的阶段有效覆盖主题
+     * @param trigger          触发原因，写入决策原因便于统计兜底触发率
+     */
+    private Decision fallbackDecision(JsonNode plan, DecisionInput in, String nextStage,
+            JsonNode currentPlan, int currentCount, List<String> effectiveCovered, String trigger) {
+        String currentStage = in.getCurrentStage();
+        if (currentPlan != null) {
+            for (String topic : requiredTopics(currentPlan)) {
+                if (!effectiveCovered.contains(topic)) {
+                    return switchTopic(
+                            fallbackQuestionFactory.createSwitchFallback(currentStage, topic, currentCount),
+                            trigger + "，改用模板化过渡题补齐当前阶段必覆盖主题「" + topic + "」");
+                }
+            }
+            if (nextStage != null && stageSatisfied(currentPlan, currentCount, effectiveCovered)) {
+                return nextStage(nextStage,
+                        fallbackQuestionFactory.createEntryFallback(
+                                nextStage, firstRequiredTopic(plan, nextStage)),
+                        trigger + "，本阶段已满足推进条件，改用下一阶段入口模板化过渡题");
+            }
+        }
+        // 继续在当前阶段出兜底题：主题按阶段题量在必覆盖主题间轮转（全部已覆盖时用它们
+        // 轮转能避免反复问同一个主题），措辞用 variant 轮转，保证连续两道兜底题不完全相同。
+        String topic = rotateTopic(currentPlan, currentCount);
+        CandidatePoolItem fallback = fallbackQuestionFactory.createSwitchFallback(
+                currentStage, topic == null ? in.getCurrentTopic() : topic, currentCount);
+        return switchTopic(fallback,
+                trigger + "，改用模板化过渡题在当前主题「" + fallback.getTopic() + "」上继续");
+    }
+
+    /**
+     * 在当前阶段的必覆盖主题间轮转取主题（按阶段题量取模）；阶段计划缺失或未配置主题时返回 null，
+     * 由调用方回退到会话当前主题。
+     */
+    private String rotateTopic(JsonNode currentPlan, int currentCount) {
+        List<String> topics = requiredTopics(currentPlan);
+        return topics.isEmpty() ? null : topics.get(Math.floorMod(currentCount, topics.size()));
     }
 
     // ==================== 决策工厂 ====================
@@ -294,11 +393,15 @@ public class StagePolicyEngine {
     }
 
     private int totalMin(JsonNode plan) {
+        // 计划缺失时取"永不满足"：宁可让 total_max 兜住上限，也不要凭空提前结束面试
         return plan.path("total_min_questions").asInt(Integer.MAX_VALUE);
     }
 
     private int totalMax(JsonNode plan) {
-        return plan.path("total_max_questions").asInt(Integer.MAX_VALUE);
+        // 计划缺失/畸形（stage_plan_json 解析失败或字段缺失）时不能退回 Integer.MAX_VALUE：
+        // 那样规则1 永不触发，配合空池模板题会让面试无限出题。这里按 StagePlanBuilder 的
+        // 计划默认值兜底，保证任何情况下面试都有确定的题量上限。
+        return plan.path("total_max_questions").asInt(DEFAULT_TOTAL_MAX_QUESTIONS);
     }
 
     private int minQuestions(JsonNode stage) {
@@ -340,8 +443,25 @@ public class StagePolicyEngine {
 
     private List<String> requiredTopics(JsonNode stage) {
         List<String> result = new ArrayList<>();
+        if (stage == null) {
+            // 阶段计划缺失或当前阶段不在计划内：按"无必覆盖主题"处理，
+            // 让兜底模板题仍能产出题面，而不是在决策阶段抛空指针
+            return result;
+        }
         stage.path("required_topics").forEach(n -> result.add(n.asText()));
         return result;
+    }
+
+    /**
+     * 取某阶段的首个必覆盖主题；阶段不存在或未配置主题时返回 null，
+     * 由 FallbackQuestionFactory 回退到阶段默认主题名。
+     */
+    private String firstRequiredTopic(JsonNode plan, String stage) {
+        if (stage == null) {
+            return null;
+        }
+        List<String> topics = requiredTopics(planStage(plan, stage));
+        return topics.isEmpty() ? null : topics.get(0);
     }
 
     private boolean containsAll(List<String> covered, List<String> required) {

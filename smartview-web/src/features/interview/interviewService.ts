@@ -30,6 +30,18 @@ export function toInterviewError(error: unknown, fallback: string): InterviewErr
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     const message = (error.response?.data as { message?: string } | undefined)?.message;
+    // 网络层超时：axios 原文是英文 "timeout of 65000ms exceeded"，直接展示既不友好，
+    // 又会鼓励用户立刻重按——而此刻服务端很可能仍在评估（提交接口 65s 超时，
+    // 略大于服务端 60s 读超时，保证先拿到服务端的中文错误）。
+    // 这里统一换成中文提示，明确"可能仍在处理，先别重复提交"。
+    // 注意排除主动取消：取消是组件卸载等正常流程，不该提示超时。
+    // 浏览器 XHR 路径下超时的 code 是 ECONNABORTED；主动取消走 axios 的 ERR_CANCELED，
+    // 用 axios.isCancel 判定而不是比对 message 文案（后者是 axios 内部实现细节）。
+    if (!error.response && error.code === "ECONNABORTED" && !axios.isCancel(error)) {
+      return new InterviewError(
+        "等待响应超时：服务端可能仍在处理，请稍后刷新查看结果，不要重复提交",
+      );
+    }
     return new InterviewError(message || error.message || fallback, status);
   }
   return new InterviewError(error instanceof Error ? error.message : fallback);

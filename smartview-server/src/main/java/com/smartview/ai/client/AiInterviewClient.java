@@ -136,8 +136,9 @@ public class AiInterviewClient {
     /**
      * 调用 FastAPI 生成候选问题池。
      *
-     * 候选池是尽力而为的缓存：调用失败抛 BusinessException 由调用方决定降级策略
-     * （预生成异步路径捕获后仅记日志；同步重建路径捕获后返回空池）。
+     * 候选池是尽力而为的缓存，且只在提问落库后的异步预热路径（preGenerateAsync）调用；
+     * 调用失败抛 BusinessException 由调用方捕获后仅记日志，不影响用户作答——
+     * 提交回答链路已不再同步重生成候选池（interview-policy.md 3.5）。
      *
      * @param request 候选池生成请求（poolType 区分预生成/追问）
      * @return FastAPI 返回的候选池结果

@@ -15,9 +15,12 @@ import com.smartview.interview.mapper.AnswerEvaluationMapper;
 import com.smartview.interview.mapper.InterviewAnswerMapper;
 import com.smartview.interview.mapper.InterviewQuestionMapper;
 import com.smartview.interview.mapper.InterviewSessionMapper;
+import com.smartview.interview.model.CandidatePoolItem;
+import com.smartview.infra.redis.SubmitInFlightLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -28,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,6 +50,7 @@ class InterviewAnswerServiceTest {
     @Mock private FollowUpPoolService followUpPoolService;
     @Mock private StagePolicyEngine stagePolicyEngine;
     @Mock private InterviewAnswerTxService answerTxService;
+    @Mock private SubmitInFlightLock submitInFlightLock;
 
     private InterviewAnswerService service;
 
@@ -54,7 +59,7 @@ class InterviewAnswerServiceTest {
         service = new InterviewAnswerService(sessionMapper, questionMapper, answerMapper,
                 answerEvaluationMapper, aiInterviewClient, followUpPoolService,
                 stagePolicyEngine, answerTxService, new InterviewSessionDtoMapper(),
-                new ObjectMapper());
+                new ObjectMapper(), submitInFlightLock);
     }
 
     private InterviewSession session() {
@@ -143,6 +148,7 @@ class InterviewAnswerServiceTest {
     void submitAnswer_evaluateFailure_doesNotPersist() {
         when(sessionMapper.selectById(1L)).thenReturn(session());
         when(questionMapper.selectById(11L)).thenReturn(currentQuestion());
+        when(submitInFlightLock.tryAcquire(anyLong(), anyLong())).thenReturn(true);
         AiEvaluateAnswerResponse fail = new AiEvaluateAnswerResponse();
         fail.setSuccess(false);
         fail.setErrorMessage("AI 繁忙");
@@ -152,29 +158,80 @@ class InterviewAnswerServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("评估失败");
         verify(answerTxService, never()).persist(any(), any(), any(), any(), any(), any(), any());
+        // 失败也必须释放锁，否则用户重试会一直被"评估中"挡住
+        verify(submitInFlightLock).release(1L, 11L);
+    }
+
+    @Test
+    void submitAnswer_同一题评估在途_拒绝且不重复调用AI() {
+        // 前端 60s 超时后用户重按会带新的 request_id，只有按题目加锁才能挡住这类重复评估，
+        // 否则同一次回答会重复消耗 LLM 配额（幂等只挡住落库，挡不住评估）
+        when(sessionMapper.selectById(1L)).thenReturn(session());
+        when(questionMapper.selectById(11L)).thenReturn(currentQuestion());
+        when(submitInFlightLock.tryAcquire(1L, 11L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.submitAnswer(7L, 1L, request("00000000-0000-0000-0000-000000000007")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("正在评估中");
+        verify(aiInterviewClient, never()).evaluateAnswer(any());
+        verify(answerTxService, never()).persist(any(), any(), any(), any(), any(), any(), any());
+        // 未持有锁的请求不得释放他人的锁
+        verify(submitInFlightLock, never()).release(anyLong(), anyLong());
+    }
+
+    @Test
+    void submitAnswer_候选池缺失时仍把本次追问候选交给决策() {
+        when(sessionMapper.selectById(1L)).thenReturn(session());
+        when(questionMapper.selectById(11L)).thenReturn(currentQuestion());
+        when(submitInFlightLock.tryAcquire(anyLong(), anyLong())).thenReturn(true);
+        AiEvaluateAnswerResponse eval = okEval();
+        eval.setFollowUpCandidates(List.of(CandidatePoolItem.builder()
+                .questionText("追问：并发可见性怎么保证？").topic("并发")
+                .stage("BASIC").candidateType("FOLLOW_UP").build()));
+        when(aiInterviewClient.evaluateAnswer(any())).thenReturn(eval);
+        // Redis 与 5 分钟快照都缺失：修复前这里会同步调 AI 重建候选池
+        when(followUpPoolService.readPool(any(), anyLong())).thenReturn(List.of());
+        ArgumentCaptor<StagePolicyEngine.DecisionInput> captor =
+                ArgumentCaptor.forClass(StagePolicyEngine.DecisionInput.class);
+        StagePolicyEngine.Decision decision = new StagePolicyEngine.Decision();
+        decision.setNextAction(StagePolicyEngine.ACTION_FOLLOW_UP);
+        when(stagePolicyEngine.decide(captor.capture())).thenReturn(decision);
+        when(answerTxService.persist(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(nextQuestionData());
+
+        service.submitAnswer(7L, 1L, request("00000000-0000-0000-0000-000000000008"));
+
+        // 追问候选本来就来自本次 /evaluate 响应，不能因为缓存缺失而丢失
+        assertThat(captor.getValue().getPool())
+                .extracting(CandidatePoolItem::getQuestionText)
+                .contains("追问：并发可见性怎么保证？");
+        verify(submitInFlightLock).release(1L, 11L);
     }
 
     @Test
     void submitAnswer_happyPath_persistsAndPreGeneratesNext() {
         when(sessionMapper.selectById(1L)).thenReturn(session());
         when(questionMapper.selectById(11L)).thenReturn(currentQuestion());
+        when(submitInFlightLock.tryAcquire(anyLong(), anyLong())).thenReturn(true);
         when(aiInterviewClient.evaluateAnswer(any())).thenReturn(okEval());
-        when(followUpPoolService.getPool(any(), anyLong(), any())).thenReturn(List.of());
+        when(followUpPoolService.readPool(any(), anyLong())).thenReturn(List.of());
         StagePolicyEngine.Decision decision = new StagePolicyEngine.Decision();
         decision.setNextAction(StagePolicyEngine.ACTION_FOLLOW_UP);
         when(stagePolicyEngine.decide(any())).thenReturn(decision);
-
-        com.smartview.generated.web.model.SubmitAnswerData data =
-                new com.smartview.generated.web.model.SubmitAnswerData(
-                        "100", new com.smartview.generated.web.model.AnswerEvaluation(
-                                80, com.smartview.generated.web.model.AnswerEvaluation.LevelEnum.GOOD))
-                        .nextQuestion(new com.smartview.generated.web.model.InterviewQuestion(
-                                "22", "1", 3, "下一题"));
-        when(answerTxService.persist(any(), any(), any(), any(), any(), any(), any())).thenReturn(data);
+        when(answerTxService.persist(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(nextQuestionData());
 
         var result = service.submitAnswer(7L, 1L, request("00000000-0000-0000-0000-000000000005"));
 
         assertThat(result.getNextQuestion().getId()).isEqualTo("22");
         verify(followUpPoolService).preGenerateAsync(1L, 22L);
+    }
+
+    private com.smartview.generated.web.model.SubmitAnswerData nextQuestionData() {
+        return new com.smartview.generated.web.model.SubmitAnswerData(
+                "100", new com.smartview.generated.web.model.AnswerEvaluation(
+                        80, com.smartview.generated.web.model.AnswerEvaluation.LevelEnum.GOOD))
+                .nextQuestion(new com.smartview.generated.web.model.InterviewQuestion(
+                        "22", "1", 3, "下一题"));
     }
 }

@@ -152,6 +152,38 @@ describe("面试会话页面", () => {
     expect(restoreSessionMock).toHaveBeenCalledTimes(2);
   });
 
+  it("提交中展示评估进度提示，避免用户以为卡死而重复提交", async () => {
+    restoreSessionMock.mockResolvedValue(activeSession());
+    // 让提交一直挂起，模拟"评估需要十几秒"的真实等待窗口
+    submitAnswerMock.mockReturnValue(new Promise<SubmitAnswerData>(() => {}));
+    renderSessionPage("/interview/session?sessionId=1");
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("回答内容"), "回答内容");
+    await user.click(screen.getByRole("button", { name: /提交回答/ }));
+
+    expect(await screen.findByText("评估中，请稍候")).toBeTruthy();
+    expect(screen.getByText(/请不要重复提交/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /正在评估回答/ })).toBeTruthy();
+    // 提交期间输入框锁定，防止边等边改造成答案与提交内容不一致
+    expect(screen.getByLabelText("回答内容")).toBeDisabled();
+  });
+
+  it("409 且当前题未变化（上次评估仍在进行）时保留草稿并提示", async () => {
+    isConflictErrorMock.mockReturnValue(true);
+    restoreSessionMock.mockResolvedValue(activeSession());
+    submitAnswerMock.mockRejectedValue(new Error("该回答正在评估中，请稍候再试"));
+    renderSessionPage("/interview/session?sessionId=1");
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("回答内容"), "回答内容");
+    await user.click(screen.getByRole("button", { name: /提交回答/ }));
+
+    expect(await screen.findByText(/正在评估中/)).toBeTruthy();
+    // 题目没有推进 → 不能清空草稿，否则用户要重打一遍答案
+    expect(screen.getByLabelText("回答内容")).toHaveValue("回答内容");
+  });
+
   it("提前结束经确认后进入已结束状态", async () => {
     restoreSessionMock.mockResolvedValue(activeSession());
     finishSessionMock.mockResolvedValue({

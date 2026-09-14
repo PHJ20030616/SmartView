@@ -34,15 +34,22 @@ import java.util.Set;
  * 功能说明：
  * - preGenerateAsync：提问落库后异步调用 FastAPI 生成预生成候选池（同阶段换题 +
  *   下一阶段入口），写入 Redis；候选池是尽力而为的缓存，失败不阻断主链路
- * - mergeFollowUps：回答提交时（5.4 接入）把追问候选并入同一 Redis key
- * - getPool：决策时读取候选池，Redis 缺失/过期/解析失败时按
- *   interview-policy.md 3.5 重建：① 最近 5 分钟决策快照 ② 同步调 FastAPI 重生成 ③ 空
+ * - mergeFollowUps：回答提交时把追问候选并入同一 Redis key
+ * - readPool：决策时读取候选池，**零 LLM 调用**：Redis → 最近 5 分钟决策快照 → 空
+ *
+ * 为什么提交路径不再同步重生成候选池（interview-policy.md 3.5）：
+ * 同步重生成会把 2~6 次 LLM 调用（单次实测均值 8.7s）塞进"用户点提交后正在等待的
+ * 那个 HTTP 请求"里，实测最坏把提交耗时推到 43.8s，超过前端 15s 上限后表现为
+ * "提交失败"，用户重按虽被幂等拦住落库、但仍白烧一次 LLM 配额。候选池本就允许缺失
+ * （缺失时由 StagePolicyEngine 出模板化过渡题），因此这里只读不生成；下一题的候选池
+ * 由提交事务提交后的 preGenerateAsync 补齐。
  *
  * 关键设计：
- * 1. Redis 只做候选池暂存，权威状态在 MySQL；快照由 5.4 的 StagePolicyEngine 写入
+ * 1. Redis 只做候选池暂存，权威状态在 MySQL；快照由 InterviewAnswerTxService 落库时写入
  *    answer_evaluation.candidate_pool_snapshot_json（本类只读取）
  * 2. key 格式 interview:candidate_pool:{sessionId}:{questionId}:{currentStage}
- * 3. 预生成触发点在 InterviewSessionService.createSession 事务提交后（跨 Bean 调用使 @Async 生效）
+ * 3. 预生成触发点在 InterviewSessionService.createSession 与 InterviewAnswerService
+ *    落库事务提交后（跨 Bean 调用使 @Async 生效）
  *
  * @author SmartView Team
  * @since 2026-08-07
@@ -93,7 +100,7 @@ public class FollowUpPoolService {
                 log.warn("候选池预生成跳过：会话不存在 sessionId={}", sessionId);
                 return;
             }
-            AiGenerateCandidatePoolRequest request = buildRequest(session, questionId, "PRE_GENERATED", null);
+            AiGenerateCandidatePoolRequest request = buildRequest(session, questionId, "PRE_GENERATED");
             AiGenerateCandidatePoolResponse response = aiInterviewClient.generateCandidatePool(request);
             // candidates=null 视为失败：避免向 Redis 写入 "null" 字面量（读取侧虽可自愈，但会污染缓存）
             if (Boolean.TRUE.equals(response.getSuccess()) && response.getCandidates() != null) {
@@ -129,86 +136,38 @@ public class FollowUpPoolService {
     }
 
     /**
-     * 读取候选池；Redis 缺失/过期/解析失败时按 3.5 重建。
+     * 读取候选池（决策用，零 LLM 调用）。
+     *
+     * 读取顺序（interview-policy.md 3.5）：Redis 命中直接返回 → 最近 5 分钟决策快照
+     * （回写 Redis 后返回）→ 返回空列表。空列表不是错误：调用方的 StagePolicyEngine
+     * 会改用模板化过渡题维持面试，不会因缓存缺失而结束会话。
      *
      * @param session    会话（调用方已加载）
      * @param questionId 待决策的问题 ID
-     * @return 候选题列表；全部失败时返回空列表，由 StagePolicyEngine 降级
+     * @return 候选题列表；无缓存且快照不可用时为空列表
      */
-    public List<CandidatePoolItem> getPool(InterviewSession session, Long questionId) {
-        return getPool(session, questionId, null);
-    }
-
-    /**
-     * 读取候选池（带评估事实版本）。
-     *
-     * 与无参版本的区别：回答提交后重建时（Redis 缺失），若携带本次评估事实，
-     * 同步重生成追问候选并并入池（memory 前向契约：回答后重建应能生成 FOLLOW_UP），
-     * 避免追问池因 Redis 缺失而静默丢失。
-     *
-     * @param evaluationFacts 本次回答评估事实；无评估（非回答路径）时传 null
-     */
-    public List<CandidatePoolItem> getPool(InterviewSession session, Long questionId,
-            AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
+    public List<CandidatePoolItem> readPool(InterviewSession session, Long questionId) {
         String key = key(session, questionId);
         List<CandidatePoolItem> pool = redisRepository.read(key);
         if (pool != null) {
             return pool;
         }
-        return rebuild(session, questionId, evaluationFacts);
-    }
-
-    // ==================== 重建链路（interview-policy.md 3.5） ====================
-
-    /**
-     * 候选池重建：① 最近 5 分钟决策快照 ② 同步调 FastAPI 重生成
-     * （预生成池 + 有评估事实时补追问池） ③ 空。
-     */
-    private List<CandidatePoolItem> rebuild(InterviewSession session, Long questionId,
-            AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
         List<CandidatePoolItem> fromSnapshot = readRecentSnapshot(session.getId());
         if (fromSnapshot != null) {
+            // 快照命中也写回 Redis，避免同一道题在短时间内反复查库
             savePool(session, questionId, fromSnapshot);
             return fromSnapshot;
         }
-        List<CandidatePoolItem> pre = generatePool(session, questionId, "PRE_GENERATED", null);
-        List<CandidatePoolItem> followUps = evaluationFacts == null
-                ? List.of()
-                : generatePool(session, questionId, "FOLLOW_UP", evaluationFacts);
-        List<CandidatePoolItem> combined = new ArrayList<>(pre);
-        combined.addAll(followUps);
-        if (!combined.isEmpty()) {
-            savePool(session, questionId, combined);
-        }
-        return combined;
-    }
-
-    /**
-     * 同步生成指定类型候选池；调用失败或无候选返回空列表（可降级）。
-     */
-    private List<CandidatePoolItem> generatePool(InterviewSession session, Long questionId,
-            String poolType, AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
-        try {
-            AiGenerateCandidatePoolRequest request =
-                    buildRequest(session, questionId, poolType, evaluationFacts);
-            AiGenerateCandidatePoolResponse response = aiInterviewClient.generateCandidatePool(request);
-            if (Boolean.TRUE.equals(response.getSuccess())
-                    && response.getCandidates() != null && !response.getCandidates().isEmpty()) {
-                return response.getCandidates();
-            }
-            log.warn("候选池同步生成返回空 sessionId={} poolType={}", session.getId(), poolType);
-        } catch (BusinessException exception) {
-            log.warn("候选池同步生成失败 sessionId={} poolType={} error={}",
-                    session.getId(), poolType, exception.getMessage());
-        }
+        log.warn("候选池与决策快照均不可用，交由决策引擎出模板化过渡题 sessionId={} questionId={}",
+                session.getId(), questionId);
         return List.of();
     }
 
     /**
      * 读取最近一次决策快照中的候选池；快照缺失或超过 5 分钟返回 null。
      *
-     * 快照格式（与 5.4 StagePolicyEngine 写入约定）：顶层 candidates 数组，
-     * 元素为 CandidatePoolItem；本类只读取 candidates，不消费决策元数据。
+     * 快照格式（与 InterviewAnswerTxService.buildSnapshotJson 写入约定）：顶层 candidates
+     * 数组，元素为 CandidatePoolItem；本类只读取 candidates，不消费决策元数据。
      *
      * 注意：快照来自上一题的决策，其 FOLLOW_UP 候选是针对上一题回答生成的，
      * 跨题复用会问出与当前回答无关的追问，因此重建时剔除 FOLLOW_UP 类型；
@@ -249,10 +208,12 @@ public class FollowUpPoolService {
 
     /**
      * 组装候选池生成请求：session 上下文 + 阶段计划/覆盖度（JSON→JsonNode）+ 历史主题。
+     *
+     * 不携带 evaluationFacts：追问池（FOLLOW_UP）已改由回答提交时的 /evaluate 响应
+     * 直接提供，本类只负责与答案无关的预生成池（同阶段换题 + 下一阶段入口）。
      */
     private AiGenerateCandidatePoolRequest buildRequest(
-            InterviewSession session, Long questionId, String poolType,
-            AiGenerateCandidatePoolRequest.EvaluationFacts evaluationFacts) {
+            InterviewSession session, Long questionId, String poolType) {
         AiGenerateCandidatePoolRequest request = new AiGenerateCandidatePoolRequest();
         request.setSessionId(String.valueOf(session.getId()));
         request.setQuestionId(String.valueOf(questionId));
@@ -266,7 +227,6 @@ public class FollowUpPoolService {
         context.setCurrentTopic(session.getCurrentTopic());
         context.setQuestionCount(session.getQuestionCount());
         request.setSessionContext(context);
-        request.setEvaluationFacts(evaluationFacts);
         request.setHistoryTopics(loadHistoryTopics(session.getId()));
         request.setTraceId(TraceIdContext.currentTraceId());
         return request;

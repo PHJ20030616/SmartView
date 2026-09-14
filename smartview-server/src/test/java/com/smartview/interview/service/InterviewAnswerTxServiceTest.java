@@ -204,4 +204,65 @@ class InterviewAnswerTxServiceTest {
                 .isInstanceOf(BusinessException.class);
         verify(sessionMapper, never()).optimisticAdvance(any());
     }
+
+    @Test
+    void persist_模板化换题候选_落库为SWITCH_TOPIC且阶段取自候选() {
+        // 空池兜底产出的模板题（FallbackQuestionFactory）与 AI 候选走同一条落库路径，
+        // 这里守住映射契约：SAME_STAGE_SWITCH → SWITCH_TOPIC，阶段/主题取自候选自身。
+        // 映射错了会出现"题目类型/阶段与题面不符"，而库里看不出来是兜底题。
+        CandidatePoolItem template = CandidatePoolItem.builder()
+                .questionText("请谈谈你在 JVM 调优方面的实践？").topic("JVM").stage("BASIC")
+                .candidateType("SAME_STAGE_SWITCH").sourceType("KNOWLEDGE_BASE")
+                .expectedPoints(List.of("实践细节")).build();
+        when(questionMapper.insert(any(InterviewQuestion.class))).thenAnswer(inv -> {
+            inv.getArgument(0, InterviewQuestion.class).setId(23L);
+            return 1;
+        });
+        when(sessionMapper.optimisticAdvance(any())).thenReturn(1);
+
+        service.persist(7L, session(), current(), request(), eval(),
+                decision(StagePolicyEngine.ACTION_SWITCH_TOPIC, template), List.of(template));
+
+        ArgumentCaptor<InterviewQuestion> questionCaptor =
+                ArgumentCaptor.forClass(InterviewQuestion.class);
+        verify(questionMapper).insert(questionCaptor.capture());
+        InterviewQuestion inserted = questionCaptor.getValue();
+        assertThat(inserted.getQuestionType()).isEqualTo("SWITCH_TOPIC");
+        assertThat(inserted.getStage()).isEqualTo("BASIC");
+        assertThat(inserted.getTopic()).isEqualTo("JVM");
+        assertThat(inserted.getSourceType()).isEqualTo("KNOWLEDGE_BASE");
+        // 换题不是追问，不挂父题（挂错会让追问树把换题当成追问深度的延续）
+        assertThat(inserted.getParentQuestionId()).isNull();
+    }
+
+    @Test
+    void persist_模板化入口候选_落库为STAGE_ENTRY并初始化下一阶段覆盖度() {
+        // 阶段达题量上限但池里没有入口候选时，兜底同样用模板题推进：
+        // 题目类型必须是 STAGE_ENTRY，且会话当前阶段/覆盖度一起切到下一阶段
+        CandidatePoolItem entry = CandidatePoolItem.builder()
+                .questionText("请介绍一段你负责的电商项目经历？").topic("电商").stage("PROJECT")
+                .candidateType("NEXT_STAGE_ENTRY").sourceType("KNOWLEDGE_BASE")
+                .expectedPoints(List.of("项目细节")).build();
+        when(questionMapper.insert(any(InterviewQuestion.class))).thenAnswer(inv -> {
+            inv.getArgument(0, InterviewQuestion.class).setId(24L);
+            return 1;
+        });
+        when(sessionMapper.optimisticAdvance(any())).thenReturn(1);
+        StagePolicyEngine.Decision d = decision(StagePolicyEngine.ACTION_NEXT_STAGE, entry);
+        d.setNextStage("PROJECT");
+
+        service.persist(7L, session(), current(), request(), eval(), d, List.of(entry));
+
+        ArgumentCaptor<InterviewQuestion> questionCaptor =
+                ArgumentCaptor.forClass(InterviewQuestion.class);
+        verify(questionMapper).insert(questionCaptor.capture());
+        assertThat(questionCaptor.getValue().getQuestionType()).isEqualTo("STAGE_ENTRY");
+        assertThat(questionCaptor.getValue().getStage()).isEqualTo("PROJECT");
+        ArgumentCaptor<InterviewSession> sessionCaptor = ArgumentCaptor.forClass(InterviewSession.class);
+        verify(sessionMapper).optimisticAdvance(sessionCaptor.capture());
+        assertThat(sessionCaptor.getValue().getCurrentStage()).isEqualTo("PROJECT");
+        // 下一阶段覆盖度初始化：未覆盖的必覆盖主题进入 missing_topics
+        assertThat(sessionCaptor.getValue().getStageCoverageJson())
+                .contains("\"missing_topics\":[\"电商\"]");
+    }
 }
