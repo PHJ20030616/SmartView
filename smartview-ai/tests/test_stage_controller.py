@@ -1,7 +1,7 @@
 """stage_controller 确定性生成目标计算测试。
 
 覆盖：预生成（同阶段换题缺主题回退、下一阶段入口、最后阶段无下一阶段）、
-追问（深度门控、得分门控、风险追问封顶）。
+追问（深度门控、空答/弱答跳过、GAP+DEEP 两型目标且不读评估事实）。
 """
 
 from app.nodes.stage_controller import compute_generation_targets
@@ -44,6 +44,9 @@ def _state(**overrides) -> dict:
         current_topic=None,
         history_topics=[],
         evaluation_facts=None,
+        # 追问目标计算需要回答文本（空答/弱答跳过）；默认给一段实质回答
+        answer_text="volatile 保证可见性并禁止指令重排",
+        question_text="volatile 的作用？",
     )
     base.update(overrides)
     return base
@@ -115,49 +118,54 @@ def test_follow_up_depth_reached_returns_empty() -> None:
     assert targets == []
 
 
-def test_follow_up_score_below_40_returns_empty() -> None:
+def test_follow_up_generates_gap_and_deep_without_evaluation_facts() -> None:
+    """与评估并行：不提供评估事实时仍产出"补缺口 + 深挖"两型目标。"""
     targets = compute_generation_targets(
         _state(
             pool_type="FOLLOW_UP",
             current_stage="BASIC",
             current_topic="Java 并发",
-            evaluation_facts={"score": 30},
+            evaluation_facts=None,
+        )
+    )["generation_targets"]
+    assert [t["followUpKind"] for t in targets] == ["GAP", "DEEP"]
+    assert all(t["candidateType"] == "FOLLOW_UP" for t in targets)
+    assert all(t["topic"] == "Java 并发" for t in targets)
+
+
+def test_follow_up_ignores_score_from_evaluation_facts() -> None:
+    """得分门控已移到 Spring 决策侧：生成侧不再按得分过滤（低于 40 也照样生成两型）。"""
+    targets = compute_generation_targets(
+        _state(
+            pool_type="FOLLOW_UP",
+            current_stage="BASIC",
+            current_topic="Java 并发",
+            evaluation_facts={"score": 15, "level": "WEAK"},
+        )
+    )["generation_targets"]
+    assert [t["followUpKind"] for t in targets] == ["GAP", "DEEP"]
+
+
+def test_follow_up_blank_answer_returns_empty() -> None:
+    targets = compute_generation_targets(
+        _state(
+            pool_type="FOLLOW_UP",
+            current_stage="BASIC",
+            current_topic="Java 并发",
+            answer_text="   ",
         )
     )["generation_targets"]
     assert targets == []
 
 
-def test_follow_up_medium_score_generates_gap_and_risk() -> None:
+def test_follow_up_weak_keyword_answer_returns_empty() -> None:
+    """明确表示不会的回答没有可追问内容，保持零 LLM 调用。"""
     targets = compute_generation_targets(
         _state(
             pool_type="FOLLOW_UP",
             current_stage="BASIC",
             current_topic="Java 并发",
-            evaluation_facts={
-                "score": 60,
-                "missingPoints": ["未说明 volatile 语义"],
-                "riskPoints": [{"category": "SHALLOW_DEPTH", "description": "回答空泛"}],
-            },
+            answer_text="不太清楚，没学过",
         )
     )["generation_targets"]
-    assert len(targets) == 2
-    assert [t["candidateType"] for t in targets] == ["FOLLOW_UP", "FOLLOW_UP"]
-    basis_types = {t["basisType"] for t in targets}
-    assert basis_types == {"missing", "risk"}
-
-
-def test_follow_up_high_score_generates_deep_without_risk() -> None:
-    targets = compute_generation_targets(
-        _state(
-            pool_type="FOLLOW_UP",
-            current_stage="BASIC",
-            current_topic="Java 并发",
-            evaluation_facts={
-                "score": 80,
-                "matchedPoints": ["准确说出 happens-before"],
-            },
-        )
-    )["generation_targets"]
-    assert len(targets) == 1
-    assert targets[0]["basisType"] == "deep"
-    assert targets[0]["basis"] == "准确说出 happens-before"
+    assert targets == []

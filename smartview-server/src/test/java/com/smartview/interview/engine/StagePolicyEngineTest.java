@@ -61,6 +61,12 @@ class StagePolicyEngineTest {
                 .stage("BASIC").candidateType(type).build();
     }
 
+    /** 带追问类型的候选（生成侧并行产出 GAP+DEEP 两型，决策侧按得分择一）。 */
+    private CandidatePoolItem followUpItem(String kind, String topic) {
+        return CandidatePoolItem.builder().questionText("追问-" + kind).topic(topic)
+                .stage("BASIC").candidateType("FOLLOW_UP").followUpKind(kind).build();
+    }
+
     @Test
     void rule1_totalMax_reachesFinish() {
         StagePolicyEngine.DecisionInput in = input();
@@ -169,6 +175,79 @@ class StagePolicyEngineTest {
         StagePolicyEngine.Decision d = engine.decide(in);
 
         assertThat(d.getNextAction()).isEqualTo("SWITCH_TOPIC");
+    }
+
+    @Test
+    void 得分达标_优先采用深挖型追问() {
+        // 生成侧不再按得分过滤，池里同时有 GAP/DEEP，≥70 必须选 DEEP（policy 3.3）
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(80);
+        in.setPool(List.of(followUpItem("GAP", "并发"), followUpItem("DEEP", "并发")));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(d.getSelectedCandidate().getFollowUpKind()).isEqualTo("DEEP");
+    }
+
+    @Test
+    void 中等得分_无换题候选时优先采用补缺口型追问() {
+        // 前提是"池中没有换题候选"（有换题候选时规则 5 会先返回 SWITCH_TOPIC）；
+        // 此时落到兜底复用追问，应取 GAP，而不是池中首个候选（这里故意把 DEEP 放在前面）
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(55);
+        in.setPool(List.of(followUpItem("DEEP", "并发"), followUpItem("GAP", "并发")));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(d.getSelectedCandidate().getFollowUpKind()).isEqualTo("GAP");
+    }
+
+    @Test
+    void 得分门控边界_四十与七十() {
+        // 边界值即策略本身（policy 3.3）：40 分不再是弱答、按 GAP 选型；70 分达标、按 DEEP 选型
+        StagePolicyEngine.DecisionInput atForty = input();
+        atForty.setScore(40);
+        atForty.setPool(List.of(followUpItem("DEEP", "并发"), followUpItem("GAP", "并发")));
+
+        StagePolicyEngine.Decision gap = engine.decide(atForty);
+        assertThat(gap.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(gap.getSelectedCandidate().getFollowUpKind()).isEqualTo("GAP");
+
+        StagePolicyEngine.DecisionInput atSeventy = input();
+        atSeventy.setScore(70);
+        atSeventy.setPool(List.of(followUpItem("DEEP", "并发"), followUpItem("GAP", "并发")));
+
+        StagePolicyEngine.Decision deep = engine.decide(atSeventy);
+        assertThat(deep.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(deep.getSelectedCandidate().getFollowUpKind()).isEqualTo("DEEP");
+    }
+
+    @Test
+    void 弱答_即使追问池有候选也不追问() {
+        // 得分门控移到决策侧后必须由引擎拦截：<40 只换题/出模板过渡题
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(20);
+        in.setPool(List.of(followUpItem("GAP", "并发")));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("SWITCH_TOPIC");
+        assertThat(d.getSelectedCandidate().getCandidateType()).isEqualTo("SAME_STAGE_SWITCH");
+    }
+
+    @Test
+    void 追问类型缺失_回退为首个可用追问() {
+        // Redis 旧数据没有 followUpKind：保持"有候选就用"的旧行为，不退化成模板题
+        StagePolicyEngine.DecisionInput in = input();
+        in.setScore(80);
+        in.setPool(List.of(item("FOLLOW_UP", "并发")));
+
+        StagePolicyEngine.Decision d = engine.decide(in);
+
+        assertThat(d.getNextAction()).isEqualTo("FOLLOW_UP");
+        assertThat(d.getSelectedCandidate().getQuestionText()).isEqualTo("关于并发");
     }
 
     @Test

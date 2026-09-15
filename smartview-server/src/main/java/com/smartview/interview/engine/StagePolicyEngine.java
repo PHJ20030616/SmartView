@@ -20,6 +20,10 @@ import java.util.List;
  * 决策优先级：规则1 硬性终止 → 规则2 阶段推进(必须) → 规则5 正常流程
  * → 规则4 候选池为空降级 → 规则2 阶段推进(可) → 兜底。
  *
+ * 追问的得分门控（policy 3.3）由本引擎承担：追问候选与回答评估在 AI 服务并行生成，
+ * 生成侧不再按得分过滤，因此引擎按得分选择候选类型（≥70 深挖 DEEP / 40-70 补缺口 GAP），
+ * 并对弱答（&lt;40）一律判为不可用（见 {@link #pickFollowUp}）。
+ *
  * 空池兜底（interview-policy.md 5.3）：候选池是尽力而为的缓存，读不到候选不等于
  * "面试没有题可问了"。因此规则4/兜底分支不再产出 FINISH(NO_VALID_QUESTION)，改为调用
  * {@link FallbackQuestionFactory} 生成模板化过渡题继续面试——把兜底方向从
@@ -63,6 +67,20 @@ public class StagePolicyEngine {
 
     /** 阶段计划缺失或字段缺失时的总题量上限兜底（与 StagePlanBuilder 的计划默认值一致） */
     private static final int DEFAULT_TOTAL_MAX_QUESTIONS = 20;
+
+    /**
+     * 追问采用的得分门控（interview-policy.md 3.3）：
+     * 得分 ≥70 才追问，且此时应使用"深挖（DEEP）"型候选。
+     */
+    private static final int FOLLOW_UP_SCORE_THRESHOLD = 70;
+
+    /**
+     * 弱答下限：得分 <40 一律不追问，改用换题/模板化过渡题。
+     *
+     * 该门控原先在 AI 服务生成侧（按得分决定是否生成追问），追问生成改为与评估并行后
+     * 生成侧拿不到得分，因此必须由本引擎在决策时拦截，保证 policy 3.3 不变量。
+     */
+    private static final int WEAK_ANSWER_SCORE_THRESHOLD = 40;
 
     private final ObjectMapper objectMapper;
     private final FallbackQuestionFactory fallbackQuestionFactory;
@@ -151,6 +169,11 @@ public class StagePolicyEngine {
         List<CandidatePoolItem> entries = candidatesOf(in.getPool(), CANDIDATE_ENTRY);
         String nextStage = nextStageOf(plan, in.getCurrentStage());
 
+        // 追问可用性（policy 3.3）：得分门控在决策侧执行 —— 追问候选与回答评估在 AI 服务
+        // 并行生成，生成侧不再按得分过滤，低分回答同样可能带回候选，因此这里显式按得分
+        // 选型（≥70 深挖 DEEP / 40-70 补缺口 GAP），并对弱答（<40）一律判为不可用。
+        CandidatePoolItem followUpCandidate = pickFollowUp(followUps, in.getScore());
+
         // 决策时覆盖度为本题提交前的状态；本题落库后当前阶段题数/覆盖/追问深度会变化，
         // 因此推进与上限判断基于"提交后"的有效值，避免每阶段实际多问 1 题（policy 2.4 规则2）。
         int currentCount = stageCount(coverage, in.getCurrentStage()) + 1;
@@ -184,19 +207,23 @@ public class StagePolicyEngine {
         }
 
         // 规则5：正常流程 —— 高质量且可追问 → 追问；否则同阶段有换题候选 → 换题
-        if (!depthLimited && in.getScore() >= 70 && !followUps.isEmpty()) {
-            return followUp(followUps.get(0), "回答质量良好（得分 " + in.getScore() + "）且未达追问深度，选择追问候选");
+        if (!depthLimited && in.getScore() >= FOLLOW_UP_SCORE_THRESHOLD && followUpCandidate != null) {
+            return followUp(followUpCandidate, "回答质量良好（得分 " + in.getScore()
+                    + "），选择追问候选（"
+                    + describeFollowUpKind(followUpCandidate) + "）");
         }
         if (!switches.isEmpty()) {
             CandidatePoolItem item = pickSwitch(switches,
                     missingTopics(coverage, in.getCurrentStage()), in.getCurrentTopic());
             return switchTopic(item, "回答质量"
-                    + (in.getScore() < 40 ? "差（得分 " + in.getScore() + "）" : "中等（得分 " + in.getScore() + "）")
+                    + (in.getScore() < WEAK_ANSWER_SCORE_THRESHOLD
+                            ? "差（得分 " + in.getScore() + "）" : "中等（得分 " + in.getScore() + "）")
                     + "，切换同阶段主题");
         }
 
-        // 规则4：追问与换题候选都为空 → 使用入口候选推进；入口也空则出模板化过渡题
-        if (followUps.isEmpty() && switches.isEmpty()) {
+        // 规则4：可用追问与换题候选都为空 → 使用入口候选推进；入口也空则出模板化过渡题
+        // 注意这里按"追问是否可用"判断（弱答即使池里有追问候选也视为不可用）
+        if (followUpCandidate == null && switches.isEmpty()) {
             if (!entries.isEmpty()) {
                 return nextStage(nextStage, entries.get(0), "追问与换题候选为空，使用下一阶段入口候选");
             }
@@ -211,10 +238,11 @@ public class StagePolicyEngine {
             return nextStage(nextStage, entries.get(0), "本阶段必覆盖主题已覆盖且达到最少题量，进入下一阶段");
         }
 
-        // 兜底：仍有追问候选则追问（无换题/入口候选时复用追问保持面试推进），
+        // 兜底：仍有可用追问候选则追问（无换题/入口候选时复用追问保持面试推进），
         // 否则出模板化过渡题继续面试。此分支保证非 FINISH 决策必带候选（不变量）。
-        if (!depthLimited && !followUps.isEmpty()) {
-            return followUp(followUps.get(0), "无可用换题/入口候选，复用追问候选保持面试推进");
+        if (!depthLimited && followUpCandidate != null) {
+            return followUp(followUpCandidate, "无可用换题/入口候选，复用追问候选保持面试推进（"
+                    + describeFollowUpKind(followUpCandidate) + "）");
         }
         return fallbackDecision(plan, in, nextStage, currentPlan, currentCount, effectiveCovered,
                 "候选池无可用候选");
@@ -352,6 +380,60 @@ public class StagePolicyEngine {
             }
         }
         return switches.get(0);
+    }
+
+    /**
+     * 按得分选择要采用的追问候选（policy 3.3 的得分门控在决策侧执行）。
+     *
+     * 规则：得分 &lt;40 → 不可用（弱答直接追问没有意义，改为换题/过渡题）；
+     * 得分 ≥70 → 优先"深挖（DEEP）"型；40~70 → 优先"补缺口（GAP）"型。
+     * 优先类型缺失时（单条生成失败、或 Redis 里的旧数据没有 followUpKind）回退为首个可用
+     * 追问候选：候选池是尽力而为的缓存，AI 服务本就按"单目标失败降级"处理，这里保持
+     * "有候选就用"的旧行为，避免因缺少类型标注而退化成模板化过渡题。
+     *
+     * 该软回退依赖 AI 侧生成顺序固定为 [GAP, DEEP]（stage_controller 的顺序约定 + 候选池
+     * 保序封顶）：两型都在时不会用到它；只有一型时才取那一型，这正是期望行为。
+     *
+     * @param followUps 追问候选（保持生成侧顺序）
+     * @param score     当前回答得分
+     * @return 采用的追问候选；不可用时返回 null
+     */
+    private CandidatePoolItem pickFollowUp(List<CandidatePoolItem> followUps, int score) {
+        if (score < WEAK_ANSWER_SCORE_THRESHOLD || followUps.isEmpty()) {
+            return null;
+        }
+        String preferred = score >= FOLLOW_UP_SCORE_THRESHOLD
+                ? CandidatePoolItem.KIND_DEEP : CandidatePoolItem.KIND_GAP;
+        for (CandidatePoolItem item : followUps) {
+            if (preferred.equals(item.getFollowUpKind())) {
+                return item;
+            }
+        }
+        // 走到这里有两种情况：①另一型生成失败（正常降级，取那一型即可）；
+        // ②候选整体没有类型标注（question_generator 会 warn，这里也留一条，便于按
+        // "软回退率"判断是不是整条链路的 followUpKind 丢了）。两者都只写日志、不改行为。
+        CandidatePoolItem fallback = followUps.get(0);
+        if (fallback.getFollowUpKind() == null) {
+            log.warn("追问候选缺少 followUpKind（软回退取首个候选）score={} topic={} candidateCount={}",
+                    score, fallback.getTopic(), followUps.size());
+        } else {
+            log.debug("首选追问类型 {} 缺失，软回退到 {} score={}",
+                    preferred, fallback.getFollowUpKind(), score);
+        }
+        return fallback;
+    }
+
+    /**
+     * 追问类型的中文描述，用于决策理由（审计时能看出采用了几型候选）。
+     */
+    private String describeFollowUpKind(CandidatePoolItem item) {
+        if (CandidatePoolItem.KIND_DEEP.equals(item.getFollowUpKind())) {
+            return "深挖型";
+        }
+        if (CandidatePoolItem.KIND_GAP.equals(item.getFollowUpKind())) {
+            return "补缺口型";
+        }
+        return "类型未标注";
     }
 
     // ==================== JSON 解析 ====================

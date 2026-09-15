@@ -1,6 +1,15 @@
 """回答评估 LangGraph 状态机。
 
-图流程：evaluate_answer → stage_controller → generate_questions → build_candidate_pool。
+图流程（两条分支并行，最后汇合；两条分支都是 1 跳，原因见 _build 注释）：
+
+    START ─┬─ evaluate_answer ────────────────────────┐
+           └─ plan_and_generate(目标计算 + 候选生成) ──┴─ build_candidate_pool → END
+
+并行依据（develop_plan/plan_1.3.md）：追问候选只依赖题目、候选人回答与期望要点，
+不依赖评估结论；实测两臂盲评打平，而串行两轮合计约 22.8s，并行后收敛为
+max(评估, 追问生成)。得分门控（<40 不追问、40-70 用 GAP、>70 用 DEEP）由 Spring
+StagePolicyEngine 在决策时按 followUpKind 执行。
+
 职责边界（docs/interview-policy.md 1.x）：只返回评估事实 + 追问候选（FOLLOW_UP 池），
 不返回任何决策字段；最终动作由 Spring StagePolicyEngine 决定。
 """
@@ -57,27 +66,56 @@ class EvaluateAnswerGraph:
         self._compiled = self._build()
 
     def _build(self) -> Any:
-        """组装并编译 LangGraph 图（追问候选生成复用候选池图节点，DRY）。"""
+        """组装并编译 LangGraph 图（追问候选生成复用候选池图节点，DRY）。
+
+        两条分支从 START 并行展开，汇聚于 build_candidate_pool。
+
+        两个必须遵守的约束（都是 LangGraph Pregel 执行模型决定的，实测踩过）：
+        1. **两条分支必须等长（各 1 跳）**：Pregel 是"超步（superstep）内并发、超步之间设栅栏"，
+           若生成分支是 stage_controller → generate_questions 两跳，它会落在超步 2，
+           而超步 1 要等评估分支跑完才结束——实际退化成串行（实测评估 14.8s 后才开始生成）。
+           因此目标计算并入生成节点（见 _plan_and_generate_wrapper），两分支同为 1 跳。
+        2. **汇合必须用 `add_edge([...], node)` 多源边**：LangGraph 的多源边语义是"等全部来源完成"，
+           而拆成两条 `add_edge(源, 目标)` 会让汇合节点被先到的分支提前触发（实测会执行两次，
+           第一次读到尚未生成的空候选）。
+
+        评估分支抛错时整图失败，调用方保持"评估失败不落库、允许重试"的语义。
+        """
         builder = StateGraph(EvaluateAnswerState)
         builder.add_node("evaluate_answer", self._evaluate_wrapper)
-        builder.add_node("stage_controller", lambda state: compute_generation_targets(state))
-        builder.add_node("generate_questions", self._generate_wrapper)
+        builder.add_node("plan_and_generate", self._plan_and_generate_wrapper)
         builder.add_node("build_candidate_pool", lambda state: build_candidate_pool(state))
         builder.add_edge(START, "evaluate_answer")
-        builder.add_edge("evaluate_answer", "stage_controller")
-        builder.add_edge("stage_controller", "generate_questions")
-        builder.add_edge("generate_questions", "build_candidate_pool")
+        builder.add_edge(START, "plan_and_generate")
+        builder.add_edge(["evaluate_answer", "plan_and_generate"], "build_candidate_pool")
         builder.add_edge("build_candidate_pool", END)
         return builder.compile()
 
     async def _evaluate_wrapper(self, state: EvaluateAnswerState) -> dict[str, Any]:
         return await evaluate_answer(state, self.settings)
 
-    async def _generate_wrapper(self, state: EvaluateAnswerState) -> dict[str, Any]:
-        return await generate_questions(state, self.settings)
+    async def _plan_and_generate_wrapper(self, state: EvaluateAnswerState) -> dict[str, Any]:
+        """目标计算 + 候选生成合并为同一节点（保证与评估同处一个超步，见 _build 注释）。
+
+        目标计算本身是确定性的、无 LLM 调用，合并后只是少一跳，不改变职责边界：
+        仍然由 compute_generation_targets 产出目标、由 generate_questions 生成候选。
+        """
+        planned = dict(state)
+        planned.update(compute_generation_targets(planned))
+        result = await generate_questions(planned, self.settings)
+        # 显式列出键而不是 **result：generate_questions 将来新增键时不会静默覆盖
+        # generation_targets（候选池组装与"全部目标失败"判断都依赖目标列表）
+        return {
+            "generation_targets": planned.get("generation_targets") or [],
+            "raw_candidates": result.get("raw_candidates") or [],
+        }
 
     async def evaluate(self, request: EvaluateAnswerRequest) -> EvaluateAnswerResponse:
-        """执行回答评估并返回契约响应（评估事实 + 追问候选）。"""
+        """执行回答评估并返回契约响应（评估事实 + 追问候选）。
+
+        追问候选与评估并行产出，因此响应里的候选不再受得分门控：低分回答同样可能带回
+        候选，由 Spring StagePolicyEngine 按 score 与 followUpKind 决定是否采用。
+        """
         initial: EvaluateAnswerState = {
             "session_id": request.sessionId,
             "question_id": request.questionId,

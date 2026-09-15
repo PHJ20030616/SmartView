@@ -40,6 +40,11 @@ class CandidatePoolState(TypedDict, total=False):
     stage_coverage: dict[str, Any]
     current_topic: str | None
     question_count: int | None
+    # 追问候选生成输入（题目/回答/期望要点）：追问目标计算与提示词都只读顶层键，
+    # 与评估图保持一致；本图在 FOLLOW_UP 时从 evaluationFacts 回填。
+    question_text: str
+    answer_text: str
+    expected_points: list[str]
     evaluation_facts: dict[str, Any] | None
     history_topics: list[str]
     generation_targets: list[dict[str, Any]]
@@ -82,6 +87,28 @@ class CandidatePoolGraph:
         确定性业务错误与 LLM 可恢复错误统一映射为 success=false；
         未预期异常记日志并返回可读错误。
         """
+        facts = (
+            request.evaluationFacts.model_dump(mode="json", exclude_none=True)
+            if request.evaluationFacts
+            else {}
+        )
+        # 追问生成输入取顶层键（与评估图一致）；evaluationFacts 已废弃，
+        # 仅作为旧调用方的题目/回答来源兼容回填。
+        #
+        # 说明：本 HTTP 入口只服务于历史调用方（Spring 生产链路的候选池预生成永远传
+        # PRE_GENERATED，见 FollowUpPoolService.buildRequest），因此这里可能存在降级输入：
+        # 旧调用方只传 answerText 时 question_text 为空、expectedPoints 契约里根本没有，
+        # 追问提示词会退化成"只有回答 + 一句追问角度"，GAP/DEEP 两型输出容易高度相似
+        # （候选池还会按 (topic, questionText) 去重）。这是兼容路径的已知取舍，
+        # 下面用 warn 让它在可观测上可见，而不是静默产出重复候选。
+        question_text = facts.get("questionText") or ""
+        if request.poolType == "FOLLOW_UP" and not question_text:
+            log.warning(
+                "追问池请求缺少题目文本（旧调用方兼容路径），追问提示词输入降级 "
+                "session_id=%s question_id=%s",
+                request.sessionId,
+                request.questionId,
+            )
         initial: CandidatePoolState = {
             "session_id": request.sessionId,
             "question_id": request.questionId,
@@ -92,11 +119,12 @@ class CandidatePoolGraph:
             "stage_coverage": request.stageCoverage,
             "current_topic": request.sessionContext.currentTopic,
             "question_count": request.sessionContext.questionCount,
-            "evaluation_facts": (
-                request.evaluationFacts.model_dump(mode="json", exclude_none=True)
-                if request.evaluationFacts
-                else None
-            ),
+            "question_text": question_text,
+            "answer_text": facts.get("answerText") or "",
+            # 该入口无期望要点来源（契约里没有该字段，evaluationFacts 也只有上面两个文本字段），
+            # 追问提示词会按"（未提供）"渲染——不是漏写
+            "expected_points": [],
+            "evaluation_facts": facts or None,
             "history_topics": request.historyTopics,
             "generation_targets": [],
             "raw_candidates": [],

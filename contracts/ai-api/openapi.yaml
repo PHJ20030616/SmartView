@@ -1,4 +1,4 @@
-﻿openapi: 3.0.3
+openapi: 3.0.3
 info:
   title: SmartView AI API
   description: SmartView FastAPI AI 服务对 Spring Boot 暴露的 API 契约
@@ -199,7 +199,11 @@ paths:
     post:
       tags:
         - 面试流程
-      summary: 评估回答并生成候选池
+      summary: 评估回答并生成追问候选池
+      description: 评估事实（得分/命中/缺失/风险）与追问候选**并行生成**：追问候选只依据
+        题目、候选人回答与期望要点，不再依赖评估结论，因此不需要等评估完成即可产出。
+        得分门控（<40 不追问、40-70 补缺口、>70 深挖）由 Spring Boot 的 StagePolicyEngine 在
+        决策时按 followUpKind 执行，AI 服务只提供候选。
       operationId: evaluateAnswer
       security:
         - APIKeyHeader: []
@@ -868,7 +872,9 @@ components:
                 type: string
         followUpCandidates:
           type: array
-          description: 追问候选池（0-2 道，结构复用 CandidatePoolItem，携带主题/阶段/期望要点供下一轮评估）
+          description: 追问候选池（0-2 道，结构复用 CandidatePoolItem，携带主题/阶段/期望要点供下一轮评估）。
+            生成时不受得分门控，按 followUpKind 区分补缺口（GAP）与深挖（DEEP）；
+            是否使用、用哪一型由 Spring Boot 决策侧按 score 决定。
           items:
             $ref: '#/components/schemas/CandidatePoolItem'
         errorMessage:
@@ -918,7 +924,9 @@ components:
               type: integer
         evaluationFacts:
           type: object
-          description: 回答评估事实，仅 FOLLOW_UP 池需要
+          deprecated: true
+          description: 回答评估事实。**已废弃**：追问生成改为与评估并行，生成侧不再读取评估事实
+            （得分门控移至 Spring 决策侧）；字段保留仅为兼容既有调用方。
           properties:
             score:
               type: integer
@@ -980,6 +988,11 @@ components:
           type: string
           enum: [SAME_STAGE_SWITCH, NEXT_STAGE_ENTRY, FOLLOW_UP]
           description: 候选类型：同阶段换题 / 下一阶段入口 / 追问
+        followUpKind:
+          type: string
+          enum: [GAP, DEEP]
+          description: 追问类型，仅 candidateType=FOLLOW_UP 时有值：GAP 补缺口（针对回答未展开或含糊的要点）、
+            DEEP 深挖（针对回答中的亮点继续深入）。生成侧不按得分过滤，由 Spring 决策侧按得分选择使用哪一型
         sourceType:
           type: string
           enum: [KNOWLEDGE_BASE, EXPERIENCE_CASE, RESUME_PROJECT, MIXED]

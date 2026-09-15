@@ -49,6 +49,8 @@ def build_candidate_pool(state: dict[str, Any]) -> dict[str, Any]:
                 topic=topic,
                 stage=str(candidate.get("stage") or ""),
                 candidateType=candidate.get("candidateType") or "SAME_STAGE_SWITCH",
+                # 追问类型由生成目标决定并透传给决策侧（按得分选择 GAP/DEEP）
+                followUpKind=candidate.get("followUpKind"),
                 sourceType=candidate.get("sourceType"),
                 expectedPoints=list(candidate.get("expectedPoints") or []),
                 targetPoint=candidate.get("targetPoint"),

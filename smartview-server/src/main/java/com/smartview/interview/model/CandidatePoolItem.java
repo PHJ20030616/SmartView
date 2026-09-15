@@ -17,6 +17,9 @@ import java.util.List;
  *
  * 字段说明：
  * - candidateType：SAME_STAGE_SWITCH 同阶段换题 / NEXT_STAGE_ENTRY 下一阶段入口 / FOLLOW_UP 追问
+ * - followUpKind：追问类型（GAP 补缺口 / DEEP 深挖），仅候选类型为 FOLLOW_UP 时有值。
+ *   追问候选与回答评估在 AI 服务并行生成，生成侧不按得分过滤，因此由 StagePolicyEngine
+ *   在决策时按得分选择使用哪一型（interview-policy.md 3.3）
  * - targetPoint：目标考察点（追问时即追问依据）
  * - reason：生成原因，追问场景说明基于哪个缺失点/风险点/亮点
  *
@@ -38,6 +41,12 @@ public class CandidatePoolItem {
     /** 候选类型：追问 */
     public static final String TYPE_FOLLOW_UP = "FOLLOW_UP";
 
+    /** 追问类型：补缺口（回答未展开/含糊的要点） */
+    public static final String KIND_GAP = "GAP";
+
+    /** 追问类型：深挖（回答中的亮点） */
+    public static final String KIND_DEEP = "DEEP";
+
     /** 候选问题正文 */
     private String questionText;
 
@@ -49,6 +58,9 @@ public class CandidatePoolItem {
 
     /** 候选类型：SAME_STAGE_SWITCH / NEXT_STAGE_ENTRY / FOLLOW_UP */
     private String candidateType;
+
+    /** 追问类型：GAP / DEEP（仅 FOLLOW_UP 有值；旧缓存数据可能为 null） */
+    private String followUpKind;
 
     /** 来源类型：KNOWLEDGE_BASE / EXPERIENCE_CASE / RESUME_PROJECT / MIXED */
     private String sourceType;

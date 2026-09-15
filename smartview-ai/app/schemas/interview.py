@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field, model_validator
 RoleDirection = Literal["JAVA_BACKEND", "AGENT_DEVELOPMENT"]
 QuestionType = Literal["OPENING", "FOLLOW_UP", "SWITCH_TOPIC", "STAGE_ENTRY"]
 SourceType = Literal["KNOWLEDGE_BASE", "EXPERIENCE_CASE", "RESUME_PROJECT", "MIXED"]
+# 追问类型：GAP 补缺口（回答未展开/含糊的要点）、DEEP 深挖（回答中的亮点）
+FollowUpKind = Literal["GAP", "DEEP"]
 
 
 class StagePlanStage(BaseModel):
@@ -149,10 +151,11 @@ class EvaluateAnswerResponse(BaseModel):
 
 
 class EvaluationFacts(BaseModel):
-    """回答评估事实（追问候选池生成输入）。
+    """回答评估事实（已废弃，仅保留字段兼容）。
 
-    对应 ai-api 契约 GenerateCandidatePoolRequest.evaluationFacts，
-    字段与 EvaluateAnswerResponse 的评估结果一致，5.4 接入 evaluate 时直接回填。
+    追问候选生成改为与回答评估并行执行，生成侧不再读取评估事实（得分门控移至
+    Spring 决策侧，按 CandidatePoolItem.followUpKind 选择），因此本模型不再参与
+    生成目标计算，仅用于兼容既有调用方请求体。
     """
 
     score: int | None = None
@@ -168,7 +171,8 @@ class GenerateCandidatePoolRequest(BaseModel):
     """候选池生成 HTTP 请求（Spring Boot → FastAPI）。
 
     poolType 决定生成目标：PRE_GENERATED 生成同阶段换题 + 下一阶段入口；
-    FOLLOW_UP 基于 evaluationFacts 生成 0-2 道追问。候选池不决定下一步。
+    FOLLOW_UP 生成"补缺口 + 深挖"两型追问候选（不再依赖 evaluationFacts）。
+    候选池不决定下一步，最终动作由 Spring 决策侧决定。
     """
 
     sessionId: str
@@ -186,12 +190,17 @@ class GenerateCandidatePoolRequest(BaseModel):
 
 
 class CandidatePoolItem(BaseModel):
-    """候选池中的一道候选题（契约 CandidatePoolItem）。"""
+    """候选池中的一道候选题（契约 CandidatePoolItem）。
+
+    followUpKind 仅 candidateType=FOLLOW_UP 时有值：生成侧不按得分过滤，
+    由 Spring 决策侧按得分选择使用 GAP（补缺口）还是 DEEP（深挖）。
+    """
 
     questionText: str
     topic: str
     stage: str
     candidateType: CandidateType
+    followUpKind: FollowUpKind | None = None
     sourceType: SourceType | None = None
     expectedPoints: list[str] = Field(default_factory=list)
     targetPoint: str | None = None

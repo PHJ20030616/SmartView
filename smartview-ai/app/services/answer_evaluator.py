@@ -19,11 +19,14 @@ log = logging.getLogger(__name__)
 _WEAK_KEYWORDS = ("不会", "不熟悉", "不知道", "没学过", "不清楚", "不了解", "答不上来")
 
 
-def _is_weak_keyword(answer_text: str) -> bool:
+def is_obviously_weak_answer(answer_text: str) -> bool:
     """判断回答是否明确表示不会/不熟悉，或完全空白未作答。
 
     仅对空白与显式否定关键词判弱；简短但肯定的回答（如"了解"）交给 LLM 评估，
     避免误杀自信回答导致提前触发 QUALITY_TOO_LOW 结束。
+
+    该判定同时被追问候选生成侧复用（stage_controller）：追问候选改与评估并行后拿不到
+    得分，但"空答/明确不会"无需任何 LLM 参与即可判定，保留零调用快路径。
     """
     text = (answer_text or "").strip()
     if not text:
@@ -44,7 +47,7 @@ async def evaluate_answer(
     facts 键：score/level/matchedPoints/missingPoints/riskPoints，
     另回填 answerText/questionText 供追问候选生成提示词使用。
     """
-    if _is_weak_keyword(answer_text):
+    if is_obviously_weak_answer(answer_text):
         log.info("回答命中弱回答关键词，直接低分 question=%s", question_text[:40])
         return {
             "score": 15,

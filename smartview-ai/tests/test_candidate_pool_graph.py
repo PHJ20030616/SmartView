@@ -17,6 +17,9 @@ from app.services import question_generator as qg
 
 _settings = Settings(_env_file=None)
 
+# 追问目标计算只跳过空答/弱答；提供一段实质回答即可产出 GAP/DEEP 两型目标
+_ANSWER = "volatile 保证可见性并禁止指令重排"
+
 _PLAN = StagePlan(
     policy_version="1.0",
     total_min_questions=7,
@@ -70,10 +73,17 @@ def _stub_llm(monkeypatch) -> None:
         user = next(m["content"] for m in messages if m["role"] == "user")
         # 从用户提示词中提取主题行，按目标主题生成对应内容
         topic = "Java 并发"
+        focus = ""
         for line in user.splitlines():
             if line.startswith("主题：") or line.startswith("追问主题："):
                 topic = line.split("：", 1)[1].strip() or topic
-        return _payload_for(topic)
+            if line.startswith("追问角度："):
+                focus = line.split("：", 1)[1].strip()
+        payload = _payload_for(topic)
+        if focus:
+            # 两型追问必须产出不同题面，否则会被候选池按 (topic, questionText) 去重
+            payload["questionText"] = f"关于{topic}的追问：{focus}。"
+        return payload
 
     monkeypatch.setattr(qg, "call_deepseek_json", fake)
 
@@ -111,6 +121,28 @@ def test_pre_generated_dedup_by_history_topic(monkeypatch) -> None:
 
 
 def test_follow_up_pool_capped_at_two(monkeypatch) -> None:
+    """追问池上限 2 道：生成侧固定产出 GAP+DEEP 两型目标。"""
+    _stub_llm(monkeypatch)
+    graph = CandidatePoolGraph(_settings)
+
+    resp = asyncio.run(
+        graph.generate(
+            _request(
+                poolType="FOLLOW_UP",
+                sessionContext={"currentTopic": "Java 并发"},
+                evaluationFacts={"answerText": _ANSWER, "questionText": "volatile 的作用？"},
+            )
+        )
+    )
+
+    assert resp.success is True
+    assert len(resp.candidates) == 2
+    assert all(c.candidateType == "FOLLOW_UP" for c in resp.candidates)
+    assert [c.followUpKind for c in resp.candidates] == ["GAP", "DEEP"]
+
+
+def test_follow_up_ignores_score_in_evaluation_facts(monkeypatch) -> None:
+    """得分门控已移至 Spring 决策侧：低分同样产出候选，由调用方决定是否采用。"""
     _stub_llm(monkeypatch)
     graph = CandidatePoolGraph(_settings)
 
@@ -120,20 +152,19 @@ def test_follow_up_pool_capped_at_two(monkeypatch) -> None:
                 poolType="FOLLOW_UP",
                 sessionContext={"currentTopic": "Java 并发"},
                 evaluationFacts={
-                    "score": 60,
-                    "missingPoints": ["未说明 volatile 语义"],
-                    "riskPoints": [{"category": "SHALLOW_DEPTH", "description": "空泛"}],
+                    "score": 30,
+                    "answerText": _ANSWER,
+                    "questionText": "volatile 的作用？",
                 },
             )
         )
     )
 
     assert resp.success is True
-    assert 1 <= len(resp.candidates) <= 2
-    assert all(c.candidateType == "FOLLOW_UP" for c in resp.candidates)
+    assert len(resp.candidates) == 2
 
 
-def test_follow_up_no_targets_returns_success_with_empty_pool(monkeypatch) -> None:
+def test_follow_up_empty_answer_returns_success_with_empty_pool(monkeypatch) -> None:
     _stub_llm(monkeypatch)
     graph = CandidatePoolGraph(_settings)
 
@@ -142,7 +173,7 @@ def test_follow_up_no_targets_returns_success_with_empty_pool(monkeypatch) -> No
             _request(
                 poolType="FOLLOW_UP",
                 sessionContext={"currentTopic": "Java 并发"},
-                evaluationFacts={"score": 30},  # 得分 < 40：stage_controller 不产生目标
+                evaluationFacts={"score": 30, "answerText": ""},  # 空答：无内容可追问
             )
         )
     )
@@ -163,16 +194,13 @@ def test_follow_up_not_deduped_by_history_topic(monkeypatch):
                 poolType="FOLLOW_UP",
                 sessionContext={"currentTopic": "Java 并发"},
                 historyTopics=["Java 并发"],  # 当前主题已在已问主题中
-                evaluationFacts={
-                    "score": 60,
-                    "missingPoints": ["未说明 volatile 语义"],
-                },
+                evaluationFacts={"answerText": _ANSWER, "questionText": "volatile 的作用？"},
             )
         )
     )
 
     assert resp.success is True
-    assert len(resp.candidates) >= 1
+    assert len(resp.candidates) == 2
     assert all(c.candidateType == "FOLLOW_UP" for c in resp.candidates)
 
 
